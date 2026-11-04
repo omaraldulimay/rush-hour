@@ -1,0 +1,151 @@
+# Local stack: postgres, redis, a one-shot migrate+seed job and the five services.
+# Credentials below are throwaway local-dev values; override with POSTGRES_PASSWORD.
+
+x-env: &env
+  DATABASE_URL: postgresql://peak:${POSTGRES_PASSWORD:-peak}@postgres:5432/peak
+  REDIS_URL: redis://redis:6379/0
+  CATALOG_URL: http://catalog:8000
+  INVENTORY_URL: http://inventory:8000
+  PAYMENT_URL: http://payment-mock:8000
+
+x-service: &service
+  restart: unless-stopped
+  environment: *env
+  healthcheck:
+    # python:3.12-slim has no curl
+    test:
+      - CMD
+      - python
+      - -c
+      - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=2)"
+    interval: 5s
+    timeout: 3s
+    retries: 10
+    start_period: 5s
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: peak
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-peak}
+      POSTGRES_DB: peak
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U peak -d peak"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # Applies all migrations, then seeds. Safe to run repeatedly.
+  migrate:
+    build:
+      context: .
+      args:
+        SERVICE: catalog
+    image: peak-ready/catalog:dev
+    command: ["sh", "-c", "python -m libs.common.migrate && python -m scripts.seed"]
+    environment: *env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  catalog:
+    <<: *service
+    build:
+      context: .
+      args:
+        SERVICE: catalog
+    image: peak-ready/catalog:dev
+    ports:
+      - "8001:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  inventory:
+    <<: *service
+    build:
+      context: .
+      args:
+        SERVICE: inventory
+    image: peak-ready/inventory:dev
+    ports:
+      - "8002:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  payment-mock:
+    <<: *service
+    build:
+      context: .
+      args:
+        SERVICE: payment_mock
+    image: peak-ready/payment-mock:dev
+    ports:
+      - "8004:8000"
+    environment:
+      <<: *env
+      PAYMENT_LATENCY_MS: "0"
+      PAYMENT_ERROR_RATE: "0"
+      PAYMENT_DECLINE_RATE: "0.02"
+
+  checkout:
+    <<: *service
+    build:
+      context: .
+      args:
+        SERVICE: checkout
+    image: peak-ready/checkout:dev
+    ports:
+      - "8003:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      catalog:
+        condition: service_healthy
+      inventory:
+        condition: service_healthy
+      payment-mock:
+        condition: service_healthy
+
+  order-worker:
+    <<: *service
+    build:
+      context: .
+      args:
+        SERVICE: order_worker
+    image: peak-ready/order-worker:dev
+    ports:
+      - "8005:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      inventory:
+        condition: service_healthy
+      payment-mock:
+        condition: service_healthy
+
+volumes:
+  pgdata:
