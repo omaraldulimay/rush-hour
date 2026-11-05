@@ -47,6 +47,8 @@ const checkoutStages =
 
 export const options = {
   discardResponseBodies: false,
+  // Keep-alive would pin every VU to the pod it first met: new pods (canary, HPA) would get no traffic.
+  noConnectionReuse: PHASE === "gameday",
   scenarios: {
     catalog: {
       executor: "ramping-arrival-rate",

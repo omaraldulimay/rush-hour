@@ -325,6 +325,7 @@ def build_report(gd: GameDay, r: dict) -> str:
     )
     window = f"{int(b - a) + 10}s"
     pending = counter_increase(f'checkout_orders_total{{status="payment_pending"}}[{window}]', b)
+    queue_end = op.value("sum(order_worker_payment_retry_queue)") or 0
     paid_later = counter_increase(f'worker_payment_retries_total{{outcome="paid"}}[{window}]', b)
     if open_s == 0:
         gd.failures.append("the circuit breaker never opened")
@@ -352,7 +353,7 @@ def build_report(gd: GameDay, r: dict) -> str:
         f"| Bad release: aborted after / back on stable after | {detect} / {back} |",
         f"| Bad release: checkouts that failed meanwhile | {share} |",
         f"| Circuit breaker open | {open_s} s |",
-        f"| Pending orders paid afterwards | {paid_later:.0f} of {pending:.0f} |",
+        f"| Pending orders (payment slow) | {pending:.0f} created, {queue_end:.0f} left in the retry queue at the end, {paid_later:.0f} payments by the worker |",
         f"| Cost per 1,000 orders | {f'${cost:.4f}' if cost else 'n/a'} (see assumption below) |",
         "",
         "## SLOs over the whole run (the bad release and the slow payment count against them)",
