@@ -9,3 +9,5 @@ htmlcov/
 .env
 .DS_Store
 .local/
+.terraform/
+*.tfstate*

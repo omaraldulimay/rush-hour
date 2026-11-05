@@ -197,7 +197,7 @@ between clicks. Traffic warms up before midnight and jumps at 00:00.
 | 4 | Prometheus, Grafana, alerts, SLOs (done) | Dashboards |
 | 5 | Argo Rollouts canary with automatic rollback (done) | Bad release aborted after 44 s, [report](gameday/report.md) |
 | 6 | k6 game day with fault injection, readiness report (done) | [Report with numbers](gameday/report.md) |
-| 7 | Terraform for AWS (EKS, RDS, ElastiCache), validated only | "Could run in a real cloud" |
+| 7 | Terraform for AWS (EKS, RDS, ElastiCache), validated only (done) | "Could run in a real cloud", see [infra/aws](../infra/aws/README.md) |
 
 ## Honest limits
 
