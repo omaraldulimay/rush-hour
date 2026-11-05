@@ -73,9 +73,20 @@ class OrderWorker:
                 handled += 1
         return handled
 
+    async def _start(self) -> None:
+        """Redis or Postgres may come up after us (Kubernetes starts everything at once): retry
+        instead of letting the consumer task die and the pod stay unready forever."""
+        while True:
+            try:
+                await self.setup()
+                await self.recover_pending()
+                return
+            except Exception:
+                log.exception("worker startup failed, retrying")
+                await asyncio.sleep(1)
+
     async def run(self) -> None:
-        await self.setup()
-        await self.recover_pending()
+        await self._start()
         sweeper = asyncio.create_task(self.run_sweeper(), name="order-sweeper")
         try:
             await self._loop()

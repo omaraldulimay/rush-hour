@@ -360,7 +360,7 @@ jobs:
             echo "::group::describe $p"; kubectl -n "${p%/*}" describe pod "${p#*/}" || true; echo "::endgroup::"
           done
           for p in $(kubectl get pods --no-headers -o name); do
-            echo "::group::logs $p"; kubectl logs "$p" --all-containers --tail=100 --prefix || true; echo "::endgroup::"
+            echo "::group::logs $p"; kubectl logs "$p" --all-containers --tail=300 --prefix 2>&1 | grep -vE '"GET /(healthz|readyz)' | tail -80 || true; echo "::endgroup::"
           done
           [ -f diag/install.log ] && tail -150 diag/install.log || true
       - name: Delete the cluster
