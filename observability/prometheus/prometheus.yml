@@ -1,0 +1,22 @@
+# Shared Prometheus config: scrape every service every 5 s. Targets are the docker compose service
+# names. For the no-Docker setup see prometheus.local.yml (same jobs, localhost ports).
+global:
+  scrape_interval: 5s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: rush-hour
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["catalog:8000"]
+        labels: { app: catalog }
+      - targets: ["inventory:8000"]
+        labels: { app: inventory }
+      - targets: ["checkout:8000"]
+        labels: { app: checkout }
+      - targets: ["payment-mock:8000"]
+        labels: { app: payment_mock }
+      - targets: ["order-worker:8000"]
+        labels: { app: order_worker }
+      - targets: ["control-room:8000"]
+        labels: { app: control_room }

@@ -1,0 +1,21 @@
+# Same jobs as prometheus.yml, for `make local` (everything on localhost, ports as in compose).
+global:
+  scrape_interval: 5s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: rush-hour
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["127.0.0.1:8001"]
+        labels: { app: catalog }
+      - targets: ["127.0.0.1:8002"]
+        labels: { app: inventory }
+      - targets: ["127.0.0.1:8003"]
+        labels: { app: checkout }
+      - targets: ["127.0.0.1:8004"]
+        labels: { app: payment_mock }
+      - targets: ["127.0.0.1:8005"]
+        labels: { app: order_worker }
+      - targets: ["127.0.0.1:8080"]
+        labels: { app: control_room }
