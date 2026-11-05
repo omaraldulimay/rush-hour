@@ -14,10 +14,10 @@ RUN apt-get update \
 
 WORKDIR /app
 COPY requirements.txt .
-# setuptools and wheel are not needed at runtime (the base image ships a vulnerable setuptools)
-RUN pip install --upgrade pip \
-    && pip uninstall -y setuptools wheel \
-    && pip install -r requirements.txt
+# pip, setuptools and wheel are build tools: the base image ships a vulnerable setuptools
+# (CVE-2025-47273) and pip vendors another copy, so remove them once the dependencies are installed.
+RUN pip install -r requirements.txt \
+    && pip uninstall -y pip setuptools wheel
 
 COPY libs ./libs
 COPY services ./services
