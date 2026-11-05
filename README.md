@@ -86,6 +86,21 @@ delete it afterwards. Redis is `fakeredis` unless `REDIS_URL` is set.
 | `observability` | `promtool check` and `promtool test rules`: every SLO rule and alert is unit-tested with its real `for:` durations |
 | `sign` (main) | Each pushed image has an SPDX SBOM attestation and a keyless cosign signature that is verified against this workflow's identity; only runs if the images also survived Kubernetes (`k8s`) |
 
+## Game day
+
+A 6-minute sale night on kind, run by [`gameday.yml`](.github/workflows/gameday.yml) (manual and weekly, not on every push): warm-up, the midnight spike, a **bad release of checkout during the spike**, a **slow payment provider**, cool-down. Checkout is an Argo Rollouts canary (20 % → 50 % → 100 %) that Prometheus checks; the bad release (`FAULT_ERROR_RATE=0.5`, same image) is aborted and rolled back on its own.
+
+| | Result |
+|---|---|
+| Peak load | 262 requests/s, 696 orders/min |
+| Bad release | aborted after 44 s, back on stable after 45 s, 6.9 % of checkouts in that window failed |
+| Payment slow | breaker open 65 s, 543 pending orders, 0 left in the retry queue afterwards |
+| Oversold units | **0** |
+| SLOs | catalog availability and latency met; checkout availability (98.09 %) and latency (98.39 %) missed because of the two incidents |
+| Cost | about $0.0012 per 1,000 orders (CPU-seconds x an assumed vCPU price) |
+
+Full report with timeline and honest limits: [docs/gameday/report.md](docs/gameday/report.md) ([workflow run](https://github.com/omaraldulimay/rush-hour/actions/runs/42099479303)).
+
 ## Observability
 
 SLOs, burn-rate alerts, runbooks and four Grafana dashboards (shop overview, SLOs, sale night, data tier): [docs/architecture.md#observability](docs/architecture.md#observability). Grafana runs in compose (http://localhost:3000), with `make local` and in the k8s CI job.
@@ -127,4 +142,4 @@ Environment variables only. The ones you will most likely touch: `DATABASE_URL`,
 `PAYMENT_DECLINE_RATE`, `WORKER_MAX_ATTEMPTS` (5), `RETRY_BASE_DELAY_S` (5), `CACHE_TTL_S` (30), `SWEEP_INTERVAL_S` (30), `STALE_CREATED_AFTER_S` (120),
 `ORPHAN_PENDING_AFTER_S` (120), `SWEEP_BATCH_SIZE` (100). The sweeper repairs stale `created`/`payment_pending`/unreleased
 orders and retries refunds (`order_worker_swept_total{action}`; refunds: `payment_refunds_total`).
-`DB_STATEMENT_CACHE_SIZE` (100; 0 behind PgBouncer in transaction mode), `DB_POOL_MIN` (2), `DB_POOL_MAX` (10).
+`FAULT_ERROR_RATE` (checkout, 0; share of `/checkout` calls answered with a 500, the game day's bad release), `DB_STATEMENT_CACHE_SIZE` (100; 0 behind PgBouncer in transaction mode), `DB_POOL_MIN` (2), `DB_POOL_MAX` (10).

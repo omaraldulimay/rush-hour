@@ -195,8 +195,8 @@ between clicks. Traffic warms up before midnight and jumps at 00:00.
 | 2 | CI: lint, tests, image build, Trivy scan, SBOM, signed images | Green check on every commit |
 | 3 | Kubernetes (kind in CI), Helm, autoscaling, PgBouncer | Pods scale with load |
 | 4 | Prometheus, Grafana, alerts, SLOs (done) | Dashboards |
-| 5 | Argo Rollouts canary with automatic rollback | Video: bad release stopped |
-| 6 | k6 game day with fault injection, readiness report | Report with numbers |
+| 5 | Argo Rollouts canary with automatic rollback (done) | Bad release aborted after 44 s, [report](gameday/report.md) |
+| 6 | k6 game day with fault injection, readiness report (done) | [Report with numbers](gameday/report.md) |
 | 7 | Terraform for AWS (EKS, RDS, ElastiCache), validated only | "Could run in a real cloud" |
 
 ## Honest limits
