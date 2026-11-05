@@ -7,6 +7,7 @@ metadata:
 data:
   REDIS_URL: {{ include "rh.redisUrl" . | quote }}
   CATALOG_URL: "http://{{ include "rh.fullname" . }}-catalog:8000"
+  CHECKOUT_URL: "http://{{ include "rh.fullname" . }}-checkout:8000"
   INVENTORY_URL: "http://{{ include "rh.fullname" . }}-inventory:8000"
   PAYMENT_URL: "http://{{ include "rh.fullname" . }}-payment-mock:8000"
   DB_POOL_MIN: {{ .Values.database.poolMin | quote }}

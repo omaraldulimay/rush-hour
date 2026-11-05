@@ -93,7 +93,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [catalog, inventory, checkout, payment_mock, order_worker]
+        service: [catalog, inventory, checkout, payment_mock, order_worker, control_room]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Compute image name and tag
@@ -150,7 +150,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [catalog, inventory, checkout, payment_mock, order_worker]
+        service: [catalog, inventory, checkout, payment_mock, order_worker, control_room]
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -193,7 +193,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [catalog, inventory, checkout, payment_mock, order_worker]
+        service: [catalog, inventory, checkout, payment_mock, order_worker, control_room]
     steps:
       - name: Compute image name and tag
         id: meta
@@ -251,7 +251,7 @@ jobs:
       - name: Load the images built in this run
         run: |
           repo="${GITHUB_REPOSITORY,,}"
-          for svc in catalog inventory checkout payment_mock order_worker; do
+          for svc in catalog inventory checkout payment_mock order_worker control_room; do
             name="${svc//_/-}"
             docker load -i "${RUNNER_TEMP}/images/image-${svc}/image.tar"
             # compose expects rush-hour/<name>:dev
@@ -317,7 +317,7 @@ jobs:
         run: kind create cluster --name rush-hour --config deploy/kind/cluster.yaml --image "$KIND_NODE_IMAGE" --wait 180s
       - name: Load the images built in this run into the nodes
         run: |
-          for svc in catalog inventory checkout payment_mock order_worker; do
+          for svc in catalog inventory checkout payment_mock order_worker control_room; do
             kind load image-archive "${RUNNER_TEMP}/images/image-${svc}/image.tar" --name rush-hour
           done
       - name: Install metrics-server (pinned; kubelet TLS check off because kind uses self-signed certs)

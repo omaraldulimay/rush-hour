@@ -126,6 +126,21 @@ services:
       requests: { cpu: 50m, memory: 96Mi }
       limits: { cpu: 500m, memory: 192Mi }
     autoscaling: { enabled: false }
+  # Demo admin panel (starts load, injects payment faults): ClusterIP only, never expose it with an
+  # Ingress or NodePort. Reach it with `kubectl port-forward svc/<release>-rush-hour-control-room 8080:8000`.
+  # The chart ships no Prometheus: set PROMETHEUS_URL to one in your cluster, otherwise the UI shows
+  # "metrics offline" (stock, orders and incidents still work).
+  control-room:
+    db: true
+    urls: true
+    replicas: 1 # keeps one run and one event log
+    nodePort: null
+    pdb: false
+    env: { PROMETHEUS_URL: "" }
+    resources:
+      requests: { cpu: 25m, memory: 96Mi }
+      limits: { cpu: 250m, memory: 192Mi }
+    autoscaling: { enabled: false }
 
 # Rolling updates, graceful shutdown and probes shared by all services.
 rollout:

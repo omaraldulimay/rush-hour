@@ -5,6 +5,7 @@ x-env: &env
   DATABASE_URL: postgresql://rushhour:${POSTGRES_PASSWORD:-rushhour}@postgres:5432/rushhour
   REDIS_URL: redis://redis:6379/0
   CATALOG_URL: http://catalog:8000
+  CHECKOUT_URL: http://checkout:8000
   INVENTORY_URL: http://inventory:8000
   PAYMENT_URL: http://payment-mock:8000
 
@@ -145,6 +146,36 @@ services:
       inventory:
         condition: service_healthy
       payment-mock:
+        condition: service_healthy
+
+  prometheus:
+    image: prom/prometheus:v3.15.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=2h
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "127.0.0.1:9090:9090"
+    restart: unless-stopped
+
+  # Mission control UI + demo admin API (starts the load, injects payment faults). Localhost only.
+  control-room:
+    <<: *service
+    build:
+      context: .
+      args:
+        SERVICE: control_room
+    image: rush-hour/control-room:dev
+    ports:
+      - "127.0.0.1:8080:8000"
+    environment:
+      <<: *env
+      PROMETHEUS_URL: http://prometheus:9090
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      checkout:
         condition: service_healthy
 
 volumes:
