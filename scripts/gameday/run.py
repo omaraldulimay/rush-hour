@@ -94,6 +94,7 @@ class GameDay:
             self.mark(f"canary {self.bad_hash} started (20 % of checkout pods)")
         if self.bad_hash and st.get("abort") and self.t_abort is None:
             self.t_abort = self.mark("analysis failed: rollout aborted (Degraded)")
+            self.diag()
         if self.bad_hash and (self.t_abort or st.get("stableRS") == self.bad_hash):
             pods = json.loads(
                 sh(
@@ -110,6 +111,16 @@ class GameDay:
                 self.t_rolled_back = self.mark(
                     "bad canary pods gone: rolled back to the stable version"
                 )
+
+    def diag(self) -> None:
+        """Why did the analysis fail? Kept in gameday-diag.log (uploaded with the report)."""
+        series = op.query(
+            'sum by (pod, status) (http_requests_total{service="checkout",route="/checkout"})'
+        )
+        with open("gameday-diag.log", "a") as fh:
+            fh.write(sh("kubectl", "get", "analysisrun", "-o", "yaml", check=False))
+            fh.write(sh("kubectl", "get", "pods", "-o", "wide", check=False))
+            fh.write(json.dumps(series, indent=1))
 
     # --- scheduled actions ---------------------------------------------------------------
     def sleep_until(self, t: float) -> None:
@@ -206,6 +217,13 @@ def rng(expr: str, start: float, end: float, step: int = 5) -> list[tuple[float,
         raise RuntimeError(body)
     series = body["data"]["result"]
     return [(float(t), float(v)) for t, v in series[0]["values"]] if series else []
+
+
+def counter_increase(selector: str, at: float) -> float:
+    """Exact count for counters of pods that lived through the whole run (worker, stable checkout)."""
+    q = urllib.parse.urlencode({"query": f"sum(increase({selector}))", "time": at})
+    result = op.http("GET", f"{op.PROM}/api/v1/query?{q}")["data"]["result"]
+    return float(result[0]["value"][1]) if result else 0.0
 
 
 def total(rate_expr: str, start: float, end: float) -> float:
@@ -305,12 +323,9 @@ def build_report(gd: GameDay, r: dict) -> str:
         for _, v in rng('max(max_over_time(circuit_breaker_state{name="payment"}[5s]))', t_slow, b)
         if v >= 2
     )
-    pending = total(
-        'sum(rate(checkout_orders_total{status="payment_pending"}[30s])) or vector(0)', a, b
-    )
-    paid_later = total(
-        'sum(rate(worker_payment_retries_total{outcome="paid"}[30s])) or vector(0)', a, b
-    )
+    window = f"{int(b - a) + 10}s"
+    pending = counter_increase(f'checkout_orders_total{{status="payment_pending"}}[{window}]', b)
+    paid_later = counter_increase(f'worker_payment_retries_total{{outcome="paid"}}[{window}]', b)
     if open_s == 0:
         gd.failures.append("the circuit breaker never opened")
     if gd.max_oversold:

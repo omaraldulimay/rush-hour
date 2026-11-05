@@ -45,6 +45,7 @@ spec:
       analysis: # runs in the background from the first step; a failed check aborts and rolls back
         templates:
           - templateName: {{ $full }}-{{ $name }}-5xx
+        startingStep: 1 # step 0 (setWeight) is done when the canary pod is up; no data before that
         args:
           - name: canary-hash
             valueFrom:

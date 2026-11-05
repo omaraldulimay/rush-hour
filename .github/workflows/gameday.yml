@@ -59,6 +59,7 @@ jobs:
           path: |
             docs/gameday/report.md
             gameday-k6.json
+            gameday-diag.log
             port-forward-*.log
           if-no-files-found: warn
       - name: Diagnostics on failure
