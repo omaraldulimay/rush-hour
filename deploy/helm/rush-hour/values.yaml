@@ -57,6 +57,25 @@ pgbouncer:
     requests: { cpu: 25m, memory: 32Mi }
     limits: { cpu: 500m, memory: 128Mi }
 
+# --- Observability (all off by default: needs the Prometheus Operator CRDs, e.g. kube-prometheus-stack) ----
+# One source of truth: rules and dashboards are the files in observability/ (symlinked into
+# files/), so docker compose, `make local` and this chart can never drift apart.
+observability:
+  interval: 5s # scrape interval of the ServiceMonitors
+  serviceMonitors:
+    enabled: false # ServiceMonitor for the six services + 
+    labels: {} # extra labels, if your Prometheus selects ServiceMonitors by label
+  prometheusRule:
+    enabled: false # SLO recording rules and alerts from files/rules
+    labels: {}
+    # alert name -> `for` duration. CI shortens PaymentBreakerOpen so the proof fits in minutes;
+    # the promtool unit tests (observability/prometheus/tests) cover the real durations.
+    forOverrides: {}
+  dashboards:
+    enabled: false # one ConfigMap per dashboard for the Grafana sidecar
+    label: grafana_dashboard
+    folder: Rush Hour
+
 # --- Migrations (Helm hook: runs before anything else is created or upgraded) ----------------------
 migrate:
   backoffLimit: 3
@@ -129,7 +148,7 @@ services:
   # Demo admin panel (starts load, injects payment faults): ClusterIP only, never expose it with an
   # Ingress or NodePort. Reach it with `kubectl port-forward svc/<release>-rush-hour-control-room 8080:8000`.
   # The chart ships no Prometheus: set PROMETHEUS_URL to one in your cluster, otherwise the UI shows
-  # "metrics offline" (stock, orders and incidents still work).
+  # "metrics offline" (stock, orders and incidents still work). With one, it also lists firing alerts.
   control-room:
     db: true
     urls: true

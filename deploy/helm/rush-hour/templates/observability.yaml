@@ -1,0 +1,76 @@
+{{- /* Monitoring objects for the Prometheus Operator (kube-prometheus-stack) and its Grafana sidecar. */}}
+{{- $full := include "rh.fullname" . }}
+{{- $obs := .Values.observability }}
+{{- if $obs.serviceMonitors.enabled }}
+# The six services all expose /metrics on the port named "http". honorLabels keeps the app's own
+# `service` label (catalog, checkout, ...) instead of renaming it to exported_service, and the job
+# is called rush-hour as in docker compose and `make local`, so the same rules and dashboards work.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ $full }}
+  labels:
+    {{- include "rh.labels" (dict "root" . "name" "servicemonitor") | nindent 4 }}
+    {{- with $obs.serviceMonitors.labels }}{{ toYaml . | nindent 4 }}{{ end }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/part-of: rush-hour
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  namespaceSelector:
+    matchNames: [{{ .Release.Namespace }}]
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ $obs.interval }}
+      scrapeTimeout: 4s
+      honorLabels: true
+      relabelings:
+        - { action: replace, targetLabel: job, replacement: rush-hour }
+{{- end }}
+{{- if $obs.prometheusRule.enabled }}
+{{- $overrides := $obs.prometheusRule.forOverrides }}
+{{- $groups := list }}
+{{- range $path, $_ := .Files.Glob "files/rules/*.rules.yml" }}
+{{- range $group := (($.Files.Get $path) | fromYaml).groups }}
+{{- range $rule := $group.rules }}
+{{- if and $rule.alert (hasKey $overrides $rule.alert) }}{{ $_ := set $rule "for" (index $overrides $rule.alert) }}{{ end }}
+{{- end }}
+{{- $groups = append $groups $group }}
+{{- end }}
+{{- end }}
+{{- if $obs.serviceMonitors.enabled }}
+---
+{{- end }}
+# Rendered from observability/prometheus/rules/*.rules.yml (single source of truth).
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ $full }}
+  labels:
+    {{- include "rh.labels" (dict "root" . "name" "rules") | nindent 4 }}
+    {{- with $obs.prometheusRule.labels }}{{ toYaml . | nindent 4 }}{{ end }}
+spec:
+  groups:
+    {{- toYaml $groups | nindent 4 }}
+{{- end }}
+{{- if $obs.dashboards.enabled }}
+{{- range $path, $_ := .Files.Glob "files/dashboards/*.json" }}
+{{- $base := base $path | trimSuffix ".json" }}
+---
+# Grafana's sidecar loads every ConfigMap that carries the dashboard label. The JSON uses a
+# $datasource variable, so it does not care which datasource uid the stack provisions.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $full }}-dashboard-{{ $base }}
+  labels:
+    {{- include "rh.labels" (dict "root" $ "name" (printf "dashboard-%s" $base)) | nindent 4 }}
+    {{ $obs.dashboards.label }}: "1"
+  annotations:
+    grafana_folder: {{ $obs.dashboards.folder | quote }}
+data:
+  {{ base $path }}: |
+    {{- $.Files.Get $path | nindent 4 }}
+{{- end }}
+{{- end }}

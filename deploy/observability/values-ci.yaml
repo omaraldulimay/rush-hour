@@ -1,0 +1,107 @@
+# kube-prometheus-stack for kind in GitHub Actions (4 CPUs, shared with the shop and k6).
+# Kept light on purpose: no Alertmanager, node-exporter, kube-state-metrics, admission webhooks or
+# default rules/dashboards of the chart; short retention; small requests. Prometheus evaluates the
+# rules from the shop chart's PrometheusRule and the Control Room reads /api/v1/alerts from it.
+fullnameOverride: prom # -> Service prom-prometheus, reached by the Control Room in the shop chart
+
+crds:
+  enabled: true
+defaultRules:
+  create: false
+alertmanager:
+  enabled: false
+nodeExporter:
+  enabled: false
+kubeStateMetrics:
+  enabled: false
+windowsMonitoring:
+  enabled: false
+kubeApiServer:
+  enabled: false
+kubelet:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeEtcd:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false
+coreDns:
+  enabled: false
+kubeDns:
+  enabled: false
+
+prometheusOperator:
+  admissionWebhooks:
+    enabled: false
+  tls:
+    enabled: false
+  kubeletService:
+    enabled: false
+  serviceMonitor:
+    selfMonitor: false
+  resources:
+    requests: { cpu: 20m, memory: 64Mi }
+    limits: { memory: 256Mi }
+
+prometheus:
+  service:
+    type: NodePort
+    nodePort: 30090 # kind maps it to localhost:9090 (deploy/kind/cluster.yaml)
+  serviceMonitor:
+    selfMonitor: false
+  prometheusSpec:
+    retention: 3h
+    scrapeInterval: 5s
+    evaluationInterval: 15s
+    # Pick up every ServiceMonitor / PrometheusRule in every namespace, not only this release's.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    probeSelectorNilUsesHelmValues: false
+    serviceMonitorNamespaceSelector: {}
+    ruleNamespaceSelector: {}
+    resources:
+      requests: { cpu: 100m, memory: 400Mi }
+      limits: { memory: 1200Mi }
+
+grafana:
+  adminPassword: ci-only # throwaway cluster
+  service:
+    type: NodePort
+    nodePort: 30300 # -> localhost:3000
+  defaultDashboardsEnabled: false
+  serviceMonitor:
+    enabled: false
+  testFramework:
+    enabled: false
+  persistence:
+    enabled: false
+  # Anyone who can reach the (CI-only) port is a Viewer, so Playwright needs no login.
+  grafana.ini:
+    auth.anonymous:
+      enabled: true
+      org_role: Viewer
+    analytics:
+      reporting_enabled: false
+      check_for_updates: false
+    plugins:
+      preinstall_disabled: true
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+      searchNamespace: ALL
+      folderAnnotation: grafana_folder
+      provider:
+        foldersFromFilesStructure: true
+    datasources:
+      enabled: true
+      defaultDatasourceEnabled: true
+      uid: prometheus
+  resources:
+    requests: { cpu: 50m, memory: 192Mi }
+    limits: { memory: 512Mi }

@@ -34,6 +34,11 @@ for tool in "$@"; do
         39c3117b6af817592dcd0ce4242105c0a7af10948c2a425306f0be8f7a8a8ab1 k6.tgz
       tar -xzf "$tmp/k6.tgz" -C "$tmp"
       install "$tmp"/k6-v2.3.0-linux-amd64/k6 "$BIN/k6" ;;
+    promtool) # Prometheus v3.15.1
+      fetch https://github.com/prometheus/prometheus/releases/download/v3.15.1/prometheus-3.15.1.linux-amd64.tar.gz \
+        6a726885328ad9efebbf36e876ce2fb6225468a71fd1e7ce3ba666d5f4d97a84 prom.tgz
+      tar -xzf "$tmp/prom.tgz" -C "$tmp" prometheus-3.15.1.linux-amd64/promtool
+      install "$tmp/prometheus-3.15.1.linux-amd64/promtool" "$BIN/promtool" ;;
     *) echo "unknown tool $tool" >&2; exit 1 ;;
   esac
 done

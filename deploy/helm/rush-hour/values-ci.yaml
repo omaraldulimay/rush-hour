@@ -17,6 +17,24 @@ services:
       PAYMENT_DECLINE_RATE: "0" # a declined payment is not a failed request, but keeps the numbers clean
   order-worker:
     nodePort: 30005
+  control-room:
+    env:
+      PROMETHEUS_URL: http://prom-prometheus.monitoring.svc:9090
 
 postgres:
   storage: 512Mi
+
+# Monitoring: needs the CRDs of deploy/observability/values-ci.yaml (kube-prometheus-stack, installed first).
+observability:
+  interval: 5s
+  serviceMonitors:
+    enabled: true
+  prometheusRule:
+    enabled: true
+    # Short `for:` so the fault-injection proof fits in minutes. The real 2 m is covered by the
+    # promtool unit tests in observability/prometheus/tests.
+    forOverrides:
+      PaymentBreakerOpen: 20s
+  dashboards:
+    enabled: true
+
