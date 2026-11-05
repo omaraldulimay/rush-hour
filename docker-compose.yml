@@ -105,7 +105,7 @@ services:
       <<: *env
       PAYMENT_LATENCY_MS: "0"
       PAYMENT_ERROR_RATE: "0"
-      PAYMENT_DECLINE_RATE: "0.02"
+      PAYMENT_DECLINE_RATE: "${PAYMENT_DECLINE_RATE:-0.02}"
 
   checkout:
     <<: *service
