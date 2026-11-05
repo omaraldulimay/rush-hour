@@ -1,0 +1,2 @@
+# Node security group of the EKS module: nodes need outbound access (image pulls from GHCR, AWS APIs).
+AWS-0104

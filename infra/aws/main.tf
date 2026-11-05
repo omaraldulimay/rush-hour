@@ -38,7 +38,7 @@ module "eks" {
   vpc_id     = module.vpc.vpc_id
   subnet_ids = module.vpc.private_subnets
 
-  endpoint_public_access                   = true
+  endpoint_public_access                   = false # reach the API from inside the VPC (VPN or bastion)
   enable_cluster_creator_admin_permissions = true
 
   addons = {
