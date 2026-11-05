@@ -1,3 +1,4 @@
+import random
 from contextlib import asynccontextmanager
 from typing import Annotated
 
@@ -107,6 +108,9 @@ def create_app(
         body: CheckoutIn,
         idempotency_key: Annotated[str | None, Header(max_length=128)] = None,
     ) -> JSONResponse:
+        if settings.fault_error_rate and random.random() < settings.fault_error_rate:
+            # the "bad release" of the game day: fails before touching stock, payment or orders
+            return JSONResponse({"error": "injected_fault"}, status_code=500)
         try:
             order, created = await service().checkout(body.cart_id, idempotency_key)
         except CheckoutError as exc:

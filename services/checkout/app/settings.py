@@ -16,6 +16,7 @@ class Settings:
     breaker_window_s: float = 30.0
     breaker_cooldown_s: float = 10.0
     cart_ttl_s: int = 86_400
+    fault_error_rate: float = 0.0  # game day: share of /checkout calls answered with a 500
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -33,4 +34,5 @@ class Settings:
             breaker_window_s=env_float("BREAKER_WINDOW_S", cls.breaker_window_s),
             breaker_cooldown_s=env_float("BREAKER_COOLDOWN_S", cls.breaker_cooldown_s),
             cart_ttl_s=env_int("CART_TTL_S", cls.cart_ttl_s),
+            fault_error_rate=env_float("FAULT_ERROR_RATE", cls.fault_error_rate),
         )

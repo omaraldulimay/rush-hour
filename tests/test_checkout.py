@@ -155,3 +155,17 @@ async def test_concurrent_requests_with_same_idempotency_key_create_one_order(
 
 async def test_unknown_order_is_404(stack: Stack) -> None:
     assert (await stack.checkout.get("/orders/nope")).status_code == 404
+
+
+async def test_fault_error_rate_returns_500_without_side_effects(stack: Stack) -> None:
+    await stack.add_product("A", stock=5)
+    await stack.checkout.put("/carts/c1/items", json={"sku": "A", "qty": 1})
+    object.__setattr__(stack.checkout_settings, "fault_error_rate", 1.0)
+    try:
+        resp = await stack.checkout.post("/checkout", json={"cart_id": "c1"})
+    finally:
+        object.__setattr__(stack.checkout_settings, "fault_error_rate", 0.0)
+    assert resp.status_code == 500
+    assert resp.json() == {"error": "injected_fault"}
+    assert await stack.stock("A") == 5
+    assert (await stack.checkout.post("/checkout", json={"cart_id": "c1"})).status_code == 201
