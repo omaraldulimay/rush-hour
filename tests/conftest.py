@@ -49,7 +49,7 @@ def database_url() -> Iterator[str]:
         return
 
     user = getpass.getuser()
-    root = Path(tempfile.mkdtemp(prefix="peak-ready-pg-"))
+    root = Path(tempfile.mkdtemp(prefix="rush-hour-pg-"))
     data, port = root / "data", _free_port()
     subprocess.run(
         [PG_BIN / "initdb", "-D", data, "-U", user, "--auth=trust", "-E", "UTF8", "--no-locale"],

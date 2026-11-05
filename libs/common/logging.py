@@ -35,8 +35,8 @@ def configure_logging(service: str, level: str = "INFO") -> None:
     root = logging.getLogger()
     root.setLevel(level)
     # Replace only our own handler so repeated calls (and pytest's capture handlers) are safe.
-    root.handlers = [h for h in root.handlers if not getattr(h, "_peak_ready", False)]
+    root.handlers = [h for h in root.handlers if not getattr(h, "_rush_hour", False)]
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(JsonFormatter(service))
-    handler._peak_ready = True  # type: ignore[attr-defined]
+    handler._rush_hour = True  # type: ignore[attr-defined]
     root.addHandler(handler)

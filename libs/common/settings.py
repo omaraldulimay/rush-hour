@@ -16,7 +16,7 @@ def env_float(name: str, default: float) -> float:
 
 
 def database_url() -> str:
-    return env_str("DATABASE_URL", "postgresql://peak:peak@localhost:5432/peak")
+    return env_str("DATABASE_URL", "postgresql://rushhour:rushhour@localhost:5432/rushhour")
 
 
 def redis_url() -> str:

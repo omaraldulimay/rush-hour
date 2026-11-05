@@ -1,5 +1,5 @@
 [project]
-name = "peak-ready"
+name = "rush-hour"
 version = "0.1.0"
 description = "Nordkai Fashion shop platform used to prove Black Friday readiness"
 requires-python = ">=3.12"

@@ -1,6 +1,6 @@
-# Peak Ready – Architecture
+# Rush Hour – Architecture
 
-Peak Ready is the platform behind a fictional fashion shop, **Nordkai Fashion**, built to prove one thing:
+Rush Hour (named after the moment everybody arrives at once) is the platform behind a fictional fashion shop, **Nordkai Fashion**, built to prove one thing:
 the shop survives its busiest night of the year – the Black Friday sale that starts at 00:00 –
 including a bad deploy and a slow payment provider in the middle of it.
 

@@ -1,4 +1,4 @@
-# Peak Ready
+# Rush Hour
 
 Platform behind a fictional fashion shop (Nordkai Fashion) that is built to survive a Black Friday
 night. Design and goals: [docs/architecture.md](docs/architecture.md). This repository currently
