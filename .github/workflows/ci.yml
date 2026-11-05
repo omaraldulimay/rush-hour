@@ -349,7 +349,7 @@ jobs:
         run: |
           rc=0
           REPORT="$PWD/load-report.md" OUT="$PWD/load-out" ./scripts/k8s/run-load.sh || rc=$?
-          [ -f load-report.md ] && cat load-report.md >> "$GITHUB_STEP_SUMMARY"
+          if [ -f load-report.md ]; then cat load-report.md | tee -a "$GITHUB_STEP_SUMMARY"; fi
           exit $rc
       - name: Diagnostics on failure
         if: failure()
