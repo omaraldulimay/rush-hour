@@ -14,7 +14,10 @@ RUN apt-get update \
 
 WORKDIR /app
 COPY requirements.txt .
-RUN pip install --upgrade pip && pip install -r requirements.txt
+# setuptools and wheel are not needed at runtime (the base image ships a vulnerable setuptools)
+RUN pip install --upgrade pip \
+    && pip uninstall -y setuptools wheel \
+    && pip install -r requirements.txt
 
 COPY libs ./libs
 COPY services ./services
