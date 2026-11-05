@@ -383,7 +383,7 @@ jobs:
         run: ./scripts/smoke.sh
       - name: Load burst, HPA scale-up and pod kill (with SLO proof and screenshots during the load)
         run: |
-          kubectl port-forward svc/rush-hour-rush-hour-control-room 8080:8000 >/dev/null 2>&1 &
+          kubectl port-forward svc/rush-hour-control-room 8080:8000 >/dev/null 2>&1 &
           sleep 3
           export REPORT="$PWD/load-report.md" OUT="$PWD/load-out"
           rc=0
@@ -397,7 +397,7 @@ jobs:
       - name: Fault injection proof - payment down, PaymentBreakerOpen must fire and recover
         run: |
           # the port-forward of the previous step ended with that step
-          kubectl port-forward svc/rush-hour-rush-hour-control-room 8080:8000 >/dev/null 2>&1 &
+          kubectl port-forward svc/rush-hour-control-room 8080:8000 >/dev/null 2>&1 &
           sleep 3
           CONTROL_ROOM_URL=http://127.0.0.1:8080 OBS_REPORT=obs-report.md \
             python scripts/k8s/obs_proof.py fault \
