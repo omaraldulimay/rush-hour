@@ -135,7 +135,7 @@ def cmd_slo() -> int:
     for row in rows:
         emit(row)
     emit(
-        f"\nHealthy shop targets: {fmt(up, '.0f')} (at least 6 expected). Burn alerts: {burning or 'none firing'}."
+        f"\nHealthy shop targets: {fmt(up, '.0f')} (6+ expected). Burn alerts: {burning or 'none'}."
     )
     emit(exporter_inventory())
     for failure in failures:
