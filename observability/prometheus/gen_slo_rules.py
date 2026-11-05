@@ -27,7 +27,8 @@ OPS = "/healthz|/readyz|/metrics"
 # name -> (objective, kind, selector, latency threshold bucket)
 SLOS = {
     "checkout_availability": (0.995, "availability", 'service="checkout",route="/checkout"', None),
-    "checkout_latency": (0.99, "latency", 'service="checkout",route="/checkout"', "1"),
+    # prometheus_client prints bucket edges as floats: le="1.0", not "1"
+    "checkout_latency": (0.99, "latency", 'service="checkout",route="/checkout"', "1.0"),
     "catalog_availability": (0.999, "availability", f'service="catalog",route!~"{OPS}"', None),
     "catalog_latency": (0.99, "latency", f'service="catalog",route!~"{OPS}"', "0.3"),
 }

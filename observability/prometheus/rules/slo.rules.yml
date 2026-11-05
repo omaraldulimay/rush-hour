@@ -53,7 +53,7 @@ groups:
         expr: sum(rate(http_requests_total{service="checkout",route="/checkout",status!~"5.."}[5m]))
         labels: { slo: checkout_latency }
       - record: slo:sli_error_ratio:rate5m
-        expr: 1 - sum(rate(http_request_duration_seconds_bucket{service="checkout",route="/checkout",status!~"5..",le="1"}[5m])) / (sum(rate(http_request_duration_seconds_count{service="checkout",route="/checkout",status!~"5.."}[5m])) > 0)
+        expr: 1 - sum(rate(http_request_duration_seconds_bucket{service="checkout",route="/checkout",status!~"5..",le="1.0"}[5m])) / (sum(rate(http_request_duration_seconds_count{service="checkout",route="/checkout",status!~"5.."}[5m])) > 0)
         labels: { slo: checkout_latency }
       - record: slo:burn_rate:rate5m
         expr: slo:sli_error_ratio:rate5m{slo="checkout_latency"} / 0.01
@@ -62,7 +62,7 @@ groups:
         expr: sum(rate(http_requests_total{service="checkout",route="/checkout",status!~"5.."}[30m]))
         labels: { slo: checkout_latency }
       - record: slo:sli_error_ratio:rate30m
-        expr: 1 - sum(rate(http_request_duration_seconds_bucket{service="checkout",route="/checkout",status!~"5..",le="1"}[30m])) / (sum(rate(http_request_duration_seconds_count{service="checkout",route="/checkout",status!~"5.."}[30m])) > 0)
+        expr: 1 - sum(rate(http_request_duration_seconds_bucket{service="checkout",route="/checkout",status!~"5..",le="1.0"}[30m])) / (sum(rate(http_request_duration_seconds_count{service="checkout",route="/checkout",status!~"5.."}[30m])) > 0)
         labels: { slo: checkout_latency }
       - record: slo:burn_rate:rate30m
         expr: slo:sli_error_ratio:rate30m{slo="checkout_latency"} / 0.01
@@ -71,7 +71,7 @@ groups:
         expr: sum(rate(http_requests_total{service="checkout",route="/checkout",status!~"5.."}[1h]))
         labels: { slo: checkout_latency }
       - record: slo:sli_error_ratio:rate1h
-        expr: 1 - sum(rate(http_request_duration_seconds_bucket{service="checkout",route="/checkout",status!~"5..",le="1"}[1h])) / (sum(rate(http_request_duration_seconds_count{service="checkout",route="/checkout",status!~"5.."}[1h])) > 0)
+        expr: 1 - sum(rate(http_request_duration_seconds_bucket{service="checkout",route="/checkout",status!~"5..",le="1.0"}[1h])) / (sum(rate(http_request_duration_seconds_count{service="checkout",route="/checkout",status!~"5.."}[1h])) > 0)
         labels: { slo: checkout_latency }
       - record: slo:burn_rate:rate1h
         expr: slo:sli_error_ratio:rate1h{slo="checkout_latency"} / 0.01
@@ -80,7 +80,7 @@ groups:
         expr: sum(rate(http_requests_total{service="checkout",route="/checkout",status!~"5.."}[6h]))
         labels: { slo: checkout_latency }
       - record: slo:sli_error_ratio:rate6h
-        expr: 1 - sum(rate(http_request_duration_seconds_bucket{service="checkout",route="/checkout",status!~"5..",le="1"}[6h])) / (sum(rate(http_request_duration_seconds_count{service="checkout",route="/checkout",status!~"5.."}[6h])) > 0)
+        expr: 1 - sum(rate(http_request_duration_seconds_bucket{service="checkout",route="/checkout",status!~"5..",le="1.0"}[6h])) / (sum(rate(http_request_duration_seconds_count{service="checkout",route="/checkout",status!~"5.."}[6h])) > 0)
         labels: { slo: checkout_latency }
       - record: slo:burn_rate:rate6h
         expr: slo:sli_error_ratio:rate6h{slo="checkout_latency"} / 0.01
