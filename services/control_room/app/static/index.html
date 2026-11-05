@@ -1,0 +1,412 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rush Hour Control Room</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230b0f1a'/%3E%3Cpath d='M5 22l6-8 5 5 6-11 5 7' fill='none' stroke='%2334d399' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<style>
+:root {
+  --bg: #0a0e19; --panel: #111827; --panel-2: #172033; --line: #243049;
+  --text: #e8edf7; --muted: #8190ad;
+  --ok: #34d399; --warn: #fbbf24; --bad: #f87171; --info: #38bdf8;
+  --radius: 14px;
+}
+* { box-sizing: border-box; }
+html { background: var(--bg); }
+body {
+  margin: 0; color: var(--text); min-height: 100vh;
+  font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: radial-gradient(1200px 600px at 80% -10%, #16213f 0%, transparent 60%), var(--bg);
+  font-variant-numeric: tabular-nums;
+}
+main { max-width: 1440px; margin: 0 auto; padding: 20px 24px 40px; }
+header { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 18px; }
+h1 { font-size: 15px; letter-spacing: .22em; text-transform: uppercase; margin: 0; font-weight: 700; }
+h1 span { color: var(--muted); font-weight: 500; }
+.pill {
+  display: inline-flex; align-items: center; gap: 8px; padding: 4px 12px; border-radius: 99px;
+  background: var(--panel); border: 1px solid var(--line); font-size: 12px; color: var(--muted);
+}
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.dot.ok { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+.dot.bad { background: var(--bad); box-shadow: 0 0 8px var(--bad); }
+.dot.warn { background: var(--warn); }
+.spacer { flex: 1; }
+#clock { color: var(--muted); font-size: 13px; }
+
+#incident {
+  display: none; align-items: center; gap: 12px; margin-bottom: 16px; padding: 12px 18px;
+  border-radius: var(--radius); font-weight: 700; letter-spacing: .04em;
+  border: 1px solid var(--bad); background: rgba(248,113,113,.12); color: var(--bad);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+#incident.slow { border-color: var(--warn); background: rgba(251,191,36,.12); color: var(--warn); }
+#incident.show { display: flex; }
+@keyframes pulse { 50% { box-shadow: 0 0 0 4px rgba(248,113,113,.15); } }
+
+.kpis { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; margin-bottom: 14px; }
+.tile {
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 16px 18px 14px; position: relative; overflow: hidden; min-width: 0;
+}
+.tile::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--line); }
+.tile.ok::before { background: var(--ok); }
+.tile.warn::before { background: var(--warn); }
+.tile.bad::before { background: var(--bad); }
+.tile.info::before { background: var(--info); }
+.label { color: var(--muted); font-size: 12px; letter-spacing: .14em; text-transform: uppercase; }
+.big { font-size: clamp(2.4rem, 4.2vw, 3.9rem); font-weight: 700; line-height: 1.05; margin-top: 6px; white-space: nowrap; }
+.big small { font-size: .38em; color: var(--muted); font-weight: 500; margin: 0 4px; }
+.big small:first-child { margin-left: 0; }
+.tile.ok .big { color: var(--ok); } .tile.warn .big { color: var(--warn); } .tile.bad .big { color: var(--bad); }
+.tile.off .big { color: #46526b; }
+
+.row { display: grid; gap: 14px; margin-bottom: 14px; }
+.charts { grid-template-columns: repeat(3, 1fr); }
+.main { grid-template-columns: 1.15fr 1fr; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; min-width: 0; }
+.card h2 { margin: 0 0 10px; font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+svg.chart { width: 100%; height: 170px; display: block; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; font-size: 12px; color: var(--muted); }
+.legend i { display: inline-block; width: 10px; height: 3px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
+.legend b { color: var(--text); font-weight: 600; margin-left: 4px; }
+.offline-msg { fill: #5c6a86; font-size: 13px; }
+
+/* limited drop */
+.drop-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.oversold { text-align: right; }
+.oversold .n { font-size: 2.6rem; font-weight: 700; line-height: 1; color: var(--ok); }
+.oversold.bad .n { color: var(--bad); }
+.oversold .label { font-size: 11px; }
+.item { display: grid; grid-template-columns: 64px 1fr 92px; align-items: center; gap: 12px; margin: 13px 0; }
+.item .name { font-weight: 600; }
+.item .sub { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bar { height: 16px; border-radius: 8px; background: var(--panel-2); overflow: hidden; }
+.bar > div { height: 100%; border-radius: 8px; background: var(--ok); transition: width .8s ease, background .4s; }
+.bar.warn > div { background: var(--warn); } .bar.bad > div { background: var(--bad); }
+.count { text-align: right; font-weight: 700; font-size: 18px; }
+.count.out { color: var(--bad); letter-spacing: .06em; font-size: 13px; }
+.count small { color: var(--muted); font-weight: 500; font-size: 12px; }
+
+/* controls */
+.controls { display: grid; gap: 18px; }
+.group h3 { margin: 0 0 8px; font-size: 12px; color: var(--muted); letter-spacing: .12em; text-transform: uppercase; font-weight: 600; }
+.inline { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+label.f { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
+input[type=number], select {
+  background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 8px;
+  padding: 8px 10px; width: 80px; font: inherit;
+}
+select { width: auto; }
+input[type=range] { accent-color: var(--warn); width: 150px; }
+button {
+  font: inherit; font-weight: 700; cursor: pointer; border-radius: 10px; padding: 10px 18px;
+  border: 1px solid var(--line); background: var(--panel-2); color: var(--text);
+}
+button:hover:not(:disabled) { border-color: #3b4c72; filter: brightness(1.15); }
+button:disabled { opacity: .4; cursor: not-allowed; }
+button.go { background: var(--ok); border-color: var(--ok); color: #05281c; font-size: 16px; padding: 12px 26px; }
+button.stop { background: var(--bad); border-color: var(--bad); color: #3a0a0a; font-size: 16px; padding: 12px 26px; }
+button.warn { color: var(--warn); border-color: rgba(251,191,36,.5); }
+button.danger { color: var(--bad); border-color: rgba(248,113,113,.5); }
+.progress { margin-top: 12px; }
+.progress .bar { height: 10px; }
+.progress .bar > div { background: var(--info); transition: width 1s linear; }
+.progress .meta { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-top: 6px; gap: 10px; flex-wrap: wrap; }
+.progress .meta b { color: var(--text); }
+
+/* events */
+#events { list-style: none; margin: 0; padding: 0; max-height: 220px; overflow: auto; font-size: 14px; }
+#events li { display: grid; grid-template-columns: 70px 14px 1fr; gap: 8px; padding: 6px 0; border-bottom: 1px solid #1a2438; align-items: center; }
+#events time { color: var(--muted); font-size: 12px; }
+#events .empty { color: var(--muted); display: block; }
+.k-alert { background: var(--bad); } .k-incident { background: var(--warn); } .k-breaker { background: var(--warn); }
+.k-soldout { background: #c084fc; } .k-run { background: var(--info); } .k-stock { background: var(--ok); }
+#events i { width: 9px; height: 9px; border-radius: 50%; display: block; }
+#toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--panel-2); border: 1px solid var(--bad); color: var(--text); padding: 10px 18px; border-radius: 10px; display: none; z-index: 5; }
+
+@media (max-width: 1100px) {
+  .kpis { grid-template-columns: repeat(3, 1fr); }
+  .charts { grid-template-columns: 1fr; }
+  .main { grid-template-columns: 1fr; }
+}
+@media (max-width: 640px) {
+  main { padding: 14px 16px 32px; }
+  .kpis { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .item { grid-template-columns: 56px 1fr 78px; gap: 8px; }
+  .big { font-size: clamp(1.7rem, 8.5vw, 2.6rem); }
+  .spacer { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Nordkai <span>/ Rush Hour</span></h1>
+    <span class="pill"><i class="dot" id="runDot"></i><span id="runText">idle</span></span>
+    <span class="pill"><i class="dot" id="metricsDot"></i><span id="metricsText">connecting</span></span>
+    <span class="spacer"></span>
+    <span id="clock"></span>
+  </header>
+
+  <div id="incident"><span id="incidentText"></span></div>
+
+  <section class="kpis">
+    <div class="tile info" id="t-orders"><div class="label">Orders / min</div><div class="big" id="v-orders">-</div></div>
+    <div class="tile info" id="t-revenue"><div class="label">Revenue</div><div class="big" id="v-revenue">-</div></div>
+    <div class="tile" id="t-errors"><div class="label">Error rate</div><div class="big" id="v-errors">-</div></div>
+    <div class="tile" id="t-p95"><div class="label">Checkout p95</div><div class="big" id="v-p95">-</div></div>
+    <div class="tile" id="t-breaker"><div class="label">Payment breaker</div><div class="big" id="v-breaker">-</div></div>
+  </section>
+
+  <section class="row charts">
+    <div class="card"><h2>Requests / s</h2><svg class="chart" id="c-rps" role="img" aria-label="Requests per second per service"></svg><div class="legend" id="l-rps"></div></div>
+    <div class="card"><h2>p95 latency (ms)</h2><svg class="chart" id="c-p95" role="img" aria-label="p95 latency per service"></svg><div class="legend" id="l-p95"></div></div>
+    <div class="card"><h2>Orders / min by status</h2><svg class="chart" id="c-orders" role="img" aria-label="Orders per minute by status"></svg><div class="legend" id="l-orders"></div></div>
+  </section>
+
+  <section class="row main">
+    <div class="card">
+      <div class="drop-head">
+        <h2>Limited drop</h2>
+        <div class="oversold" id="oversold" title="Units sold beyond stock, from the database invariant"><div class="n" id="oversoldN">0</div><div class="label">oversold</div></div>
+      </div>
+      <div id="items"></div>
+    </div>
+
+    <div class="card controls">
+      <div class="group">
+        <h3>Rush hour</h3>
+        <div class="inline">
+          <button class="go" id="start">Start rush hour</button>
+          <button class="stop" id="stop" hidden>Stop</button>
+          <label class="f">users <input type="number" id="users" value="50" min="1" max="200"></label>
+          <label class="f">minutes <input type="number" id="minutes" value="3" min="0.25" max="30" step="0.25"></label>
+        </div>
+        <div class="progress" id="progress" hidden>
+          <div class="bar"><div id="progressBar" style="width:0"></div></div>
+          <div class="meta"><span id="progressText"></span><span id="progressCounts"></span></div>
+        </div>
+      </div>
+      <div class="group">
+        <h3>Incidents (payment provider)</h3>
+        <div class="inline">
+          <button class="warn" id="slow">Payment slow</button>
+          <button class="danger" id="down">Payment down</button>
+          <button id="reset">Reset</button>
+        </div>
+        <div class="inline" style="margin-top:10px">
+          <label class="f">latency <input type="range" id="latency" min="500" max="6000" step="250" value="3000"> <b id="latencyV" style="color:var(--text)">3000 ms</b></label>
+          <label class="f">for <select id="duration"><option value="30">30 s</option><option value="120">2 min</option><option value="0">until reset</option></select></label>
+        </div>
+      </div>
+      <div class="group">
+        <h3>Stock</h3>
+        <button id="resetStock">Reset limited-drop stock</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Timeline</h2>
+    <ul id="events"><li><span class="empty">No events yet.</span></li></ul>
+  </section>
+</main>
+<div id="toast" role="alert"></div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const SVC_COLORS = { catalog: "#38bdf8", inventory: "#a78bfa", checkout: "#f1f5f9", payment_mock: "#2dd4bf", order_worker: "#64748b" };
+const ORDER_COLORS = { paid: "#34d399", payment_pending: "#fbbf24", failed: "#f87171" };
+let latestState = null;
+
+async function api(path, body) {
+  const opts = body === undefined ? {} : { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) };
+  const resp = await fetch(path, opts);
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error((data.detail && data.detail.error) || data.error || ("HTTP " + resp.status));
+  return data;
+}
+let toastTimer;
+function toast(msg) {
+  const el = $("toast"); el.textContent = msg; el.style.display = "block";
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => (el.style.display = "none"), 4000);
+}
+const fmt = (v, d = 0) => (v == null ? "-" : v.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d }));
+function tile(id, cls) { $(id).className = "tile " + cls; }
+
+/* ---- KPIs ---- */
+function renderKpis(s) {
+  const online = s.metrics.online, k = s.kpis || {};
+  $("metricsDot").className = "dot " + (online ? "ok" : "bad");
+  $("metricsText").textContent = online ? "metrics live" : "metrics offline";
+  const off = (id) => tile(id, "off");
+  if (online) {
+    $("v-orders").innerHTML = fmt(k.orders_per_min ?? 0, 0) + "<small>/min</small>"; tile("t-orders", "info");
+    const e = k.error_rate_pct;
+    $("v-errors").innerHTML = e == null ? "0.0<small>%</small>" : fmt(e, 1) + "<small>%</small>";
+    tile("t-errors", e == null || e < 1 ? "ok" : e < 5 ? "warn" : "bad");
+    const p = k.checkout_p95_ms;
+    $("v-p95").innerHTML = p == null ? "-" : fmt(p, 0) + "<small>ms</small>";
+    tile("t-p95", p == null ? "off" : p < 500 ? "ok" : p < 1500 ? "warn" : "bad");
+    const b = k.breaker;
+    $("v-breaker").textContent = b === "half_open" ? "half-open" : (b || "-");
+    tile("t-breaker", b === "closed" ? "ok" : b === "half_open" ? "warn" : b === "open" ? "bad" : "off");
+  } else {
+    ["v-orders", "v-errors", "v-p95", "v-breaker"].forEach((id) => ($(id).textContent = "-"));
+    ["t-orders", "t-errors", "t-p95", "t-breaker"].forEach(off);
+  }
+  $("v-revenue").innerHTML = k.revenue_eur == null ? "-" : "<small>&euro;</small>" + fmt(k.revenue_eur, 0);
+  tile("t-revenue", k.revenue_eur == null ? "off" : "info");
+}
+
+/* ---- limited drop ---- */
+function renderStock(s) {
+  const st = s.stock;
+  if (!st) { $("items").textContent = s.db.online ? "" : "database offline"; return; }
+  $("oversoldN").textContent = st.oversold;
+  $("oversold").className = "oversold" + (st.oversold > 0 ? " bad" : "");
+  const box = $("items");
+  if (box.children.length !== st.items.length) {
+    box.innerHTML = st.items.map(() => '<div class="item"><div class="name"></div><div><div class="bar"><div></div></div><div class="sub"></div></div><div class="count"></div></div>').join("");
+  }
+  st.items.forEach((it, i) => {
+    const row = box.children[i], frac = it.initial ? Math.max(0, it.available) / it.initial : 0;
+    row.children[0].textContent = it.label;
+    const bar = row.children[1].children[0];
+    bar.className = "bar" + (frac <= 0.2 ? " bad" : frac <= 0.5 ? " warn" : "");
+    bar.firstChild.style.width = (frac * 100).toFixed(1) + "%";
+    row.children[1].children[1].textContent = it.name;
+    const c = row.children[2];
+    if (it.sold_out) { c.className = "count out"; c.textContent = "SOLD OUT"; }
+    else { c.className = "count"; c.innerHTML = it.available + " <small>/ " + it.initial + "</small>"; }
+  });
+}
+
+/* ---- run + incident ---- */
+function renderRun(s) {
+  const r = s.run, running = r.running;
+  const label = { idle: "idle", warmup: "warm-up", rush: "RUSH HOUR", done: "run finished", stopped: "run stopped" }[r.phase] || r.phase;
+  $("runText").textContent = label;
+  $("runDot").className = "dot " + (running ? "ok" : "");
+  $("start").hidden = running; $("stop").hidden = !running;
+  $("users").disabled = $("minutes").disabled = running;
+  $("resetStock").disabled = running;
+  const prog = $("progress");
+  prog.hidden = r.phase === "idle";
+  if (r.phase !== "idle") {
+    $("progressBar").style.width = Math.min(100, (r.elapsed_s / r.duration_s) * 100) + "%";
+    const left = Math.max(0, Math.round(r.duration_s - r.elapsed_s));
+    $("progressText").innerHTML = running ? "<b>" + r.active_users + "</b> users shopping, " + left + " s left" : label;
+    const c = r.counts;
+    $("progressCounts").innerHTML = "<b>" + c.paid + "</b> paid &middot; <b>" + c.payment_pending + "</b> pending &middot; <b>" + c.sold_out + "</b> sold out &middot; <b>" + c.errors + "</b> errors";
+  }
+  const inc = s.incident, box = $("incident");
+  box.className = inc.kind === "none" || inc.kind === "unknown" ? "" : "show" + (inc.kind === "slow" ? " slow" : "");
+  if (box.classList.contains("show")) {
+    const left = inc.until ? " - ends in " + Math.max(0, Math.round(inc.until - s.ts)) + " s" : "";
+    $("incidentText").textContent = inc.kind === "slow"
+      ? "INCIDENT: payment provider slow (" + inc.latency_ms + " ms)" + left
+      : "INCIDENT: payment provider down (" + Math.round(inc.error_rate * 100) + " % errors)" + left;
+  }
+}
+
+function renderEvents(s) {
+  const ul = $("events");
+  if (!s.events.length) return;
+  ul.replaceChildren(...s.events.map((e) => {
+    const li = document.createElement("li");
+    const t = document.createElement("time"); t.textContent = new Date(e.t * 1000).toLocaleTimeString("en-GB");
+    const dot = document.createElement("i"); dot.className = "k-" + e.kind;
+    const m = document.createElement("span"); m.textContent = e.message;
+    li.append(t, dot, m); return li;
+  }));
+}
+
+async function pollState() {
+  try {
+    const s = await api("/api/state");
+    latestState = s;
+    renderKpis(s); renderStock(s); renderRun(s); renderEvents(s);
+  } catch (e) {
+    $("metricsDot").className = "dot bad"; $("metricsText").textContent = "control room unreachable";
+  }
+}
+
+/* ---- charts (inline SVG) ---- */
+const NS = "http://www.w3.org/2000/svg";
+function el(name, attrs, text) {
+  const n = document.createElementNS(NS, name);
+  for (const k in attrs) n.setAttribute(k, attrs[k]);
+  if (text != null) n.textContent = text;
+  return n;
+}
+function niceMax(v) {
+  if (!(v > 0)) return 1;
+  const p = Math.pow(10, Math.floor(Math.log10(v))), f = v / p;
+  return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * p;
+}
+function drawChart(svgId, legendId, data, colors, unit) {
+  const svg = $(svgId), W = 400, H = 170, L = 38, R = 8, T = 8, B = 20;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.replaceChildren();
+  const legend = $(legendId); legend.replaceChildren();
+  const names = Object.keys(data || {});
+  const now = Date.now() / 1000, t0 = now - 300;
+  let max = 0;
+  names.forEach((n) => data[n].forEach(([, v]) => { if (v != null && v > max) max = v; }));
+  if (!names.length) {
+    svg.append(el("text", { x: W / 2, y: H / 2, "text-anchor": "middle", class: "offline-msg" }, data ? "no data yet" : "metrics offline"));
+    return;
+  }
+  const top = niceMax(max), x = (t) => L + ((t - t0) / 300) * (W - L - R), y = (v) => T + (1 - v / top) * (H - T - B);
+  [0, 0.5, 1].forEach((f) => {
+    const yy = y(top * f);
+    svg.append(el("line", { x1: L, x2: W - R, y1: yy, y2: yy, stroke: "#243049", "stroke-width": 1 }));
+    svg.append(el("text", { x: L - 6, y: yy + 4, "text-anchor": "end", fill: "#7d8aa5", "font-size": 10 }, fmt(top * f, top < 5 ? 1 : 0)));
+  });
+  [0, 1, 2, 3, 4, 5].forEach((m) => svg.append(el("text", { x: x(t0 + m * 60), y: H - 5, "text-anchor": m === 0 ? "start" : m === 5 ? "end" : "middle", fill: "#7d8aa5", "font-size": 10 }, m === 5 ? "now" : "-" + (5 - m) + "m")));
+  names.forEach((n) => {
+    const color = colors[n] || "#94a3b8";
+    let d = "", pen = false, last = null;
+    data[n].forEach(([t, v]) => {
+      if (v == null) { pen = false; return; }
+      d += (pen ? "L" : "M") + x(t).toFixed(1) + " " + y(v).toFixed(1); pen = true; last = v;
+    });
+    if (d) svg.append(el("path", { d, fill: "none", stroke: color, "stroke-width": n === "checkout" ? 2.6 : 1.8, "stroke-linejoin": "round", "stroke-linecap": "round" }));
+    const item = document.createElement("span");
+    item.innerHTML = '<i style="background:' + color + '"></i>' + n.replace("_", "-") + "<b>" + (last == null ? "-" : fmt(last, last < 10 ? 1 : 0)) + unit + "</b>";
+    legend.append(item);
+  });
+}
+async function pollSeries() {
+  try {
+    const s = await api("/api/series");
+    if (!s.online) { drawChart("c-rps", "l-rps", null, {}, ""); drawChart("c-p95", "l-p95", null, {}, ""); drawChart("c-orders", "l-orders", null, {}, ""); return; }
+    drawChart("c-rps", "l-rps", s.rps, SVC_COLORS, "");
+    drawChart("c-p95", "l-p95", s.p95_ms, SVC_COLORS, "");
+    drawChart("c-orders", "l-orders", s.orders, ORDER_COLORS, "");
+  } catch (e) { /* the state poll shows the outage */ }
+}
+
+/* ---- actions ---- */
+async function act(fn) { try { await fn(); } catch (e) { toast(e.message.replace(/_/g, " ")); } pollState(); }
+$("start").onclick = () => act(() => api("/api/rush/start", { users: +$("users").value, minutes: +$("minutes").value }));
+$("stop").onclick = () => act(() => api("/api/rush/stop", {}));
+const duration = () => (+$("duration").value || null);
+$("slow").onclick = () => act(() => api("/api/fault", { kind: "slow", latency_ms: +$("latency").value, duration_s: duration() }));
+$("down").onclick = () => act(() => api("/api/fault", { kind: "down", error_rate: 1, duration_s: duration() }));
+$("reset").onclick = () => act(() => api("/api/fault", { kind: "reset" }));
+$("resetStock").onclick = () => act(() => api("/api/reset-stock", {}));
+$("latency").oninput = () => ($("latencyV").textContent = $("latency").value + " ms");
+
+function tick() { $("clock").textContent = new Date().toLocaleString("en-GB", { weekday: "short", hour: "2-digit", minute: "2-digit", second: "2-digit" }); }
+setInterval(tick, 1000); tick();
+pollState(); pollSeries();
+setInterval(() => { if (!document.hidden) pollState(); }, 2000);
+setInterval(() => { if (!document.hidden) pollSeries(); }, 5000);
+</script>
+</body>
+</html>
