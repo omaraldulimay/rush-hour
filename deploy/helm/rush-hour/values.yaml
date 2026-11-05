@@ -167,6 +167,18 @@ rollout:
   # Endpoint removal and kube-proxy updates are asynchronous: keep serving for a few seconds after
   # the pod is marked terminating, then let uvicorn drain on SIGTERM.
   preStopSleepSeconds: 5
+  # Canary releases with Argo Rollouts (needs its CRDs). Off: plain Deployments. On: the services
+  # listed below become Rollouts and are checked against Prometheus while they roll out.
+  enabled: false
+  services: [checkout]
+  canarySteps:
+    - setWeight: 20
+    - pause: { duration: 60s }
+    - setWeight: 50
+    - pause: { duration: 60s }
+    - setWeight: 100
+  maxErrorRate: 0.05 # abort and roll back above 5 % 5xx among the canary's /checkout answers
+  prometheusAddress: http://prom-prometheus.monitoring.svc:9090
 
 # Black Friday behaviour: scale up immediately, scale down slowly (see templates/hpa.yaml).
 autoscaling:

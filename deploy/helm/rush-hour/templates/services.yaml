@@ -1,6 +1,7 @@
 {{- $full := include "rh.fullname" . }}
 {{- range $name, $svc := .Values.services }}
 {{- $ctx := dict "root" $ "name" $name }}
+{{- $canary := and $.Values.rollout.enabled (has $name $.Values.rollout.services) }}
 ---
 apiVersion: v1
 kind: Service
@@ -20,8 +21,13 @@ spec:
       nodePort: {{ $svc.nodePort }}
       {{- end }}
 ---
+{{- if $canary }}
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+{{- else }}
 apiVersion: apps/v1
 kind: Deployment
+{{- end }}
 metadata:
   name: {{ $full }}-{{ $name }}
   labels:
@@ -31,9 +37,27 @@ spec:
   {{- if not (and $svc.autoscaling $svc.autoscaling.enabled) }}
   replicas: {{ $svc.replicas }}
   {{- end }}
+  {{- if $canary }}
+  strategy:
+    canary:
+      maxSurge: 1
+      maxUnavailable: 0
+      analysis: # runs in the background from the first step; a failed check aborts and rolls back
+        templates:
+          - templateName: {{ $full }}-{{ $name }}-5xx
+        args:
+          - name: canary-hash
+            valueFrom:
+              podTemplateHashValue: Latest
+      steps:
+        {{- range $.Values.rollout.canarySteps }}
+        - {{ toJson . }}
+        {{- end }}
+  {{- else }}
   strategy:
     type: RollingUpdate
     rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }
+  {{- end }}
   selector:
     matchLabels:
       {{- include "rh.selector" $ctx | nindent 6 }}
@@ -96,6 +120,33 @@ spec:
             - { name: tmp, mountPath: /tmp }
       volumes:
         - { name: tmp, emptyDir: {} }
+{{- if $canary }}
+---
+# Fails when more than the allowed share of the canary pods' /checkout answers are 5xx. The canary is
+# found by its pod name (<rollout>-<pod-template-hash>-<id>); the Service sends traffic to old and new
+# pods alike, so the share of requests a canary gets follows its share of the pods.
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: {{ $full }}-{{ $name }}-5xx
+  labels:
+    {{- include "rh.labels" $ctx | nindent 4 }}
+spec:
+  args:
+    - name: canary-hash
+  metrics:
+    - name: canary-5xx-rate
+      interval: 10s
+      initialDelay: 20s
+      failureLimit: 1
+      successCondition: result[0] < {{ $.Values.rollout.maxErrorRate }}
+      provider:
+        prometheus:
+          address: {{ $.Values.rollout.prometheusAddress }}
+          query: |
+            (sum(rate(http_requests_total{service="{{ $name }}",route="/checkout",status=~"5..",pod=~".*-{{ "{{" }}args.canary-hash{{ "}}" }}-.*"}[30s])) or vector(0))
+            / sum(rate(http_requests_total{service="{{ $name }}",route="/checkout",pod=~".*-{{ "{{" }}args.canary-hash{{ "}}" }}-.*"}[30s]))
+{{- end }}
 {{- if $svc.pdb }}
 ---
 apiVersion: policy/v1
@@ -124,8 +175,13 @@ metadata:
     {{- include "rh.labels" $ctx | nindent 4 }}
 spec:
   scaleTargetRef:
+    {{- if $canary }}
+    apiVersion: argoproj.io/v1alpha1
+    kind: Rollout
+    {{- else }}
     apiVersion: apps/v1
     kind: Deployment
+    {{- end }}
     name: {{ $full }}-{{ $name }}
   minReplicas: {{ $svc.autoscaling.minReplicas }}
   maxReplicas: {{ $svc.autoscaling.maxReplicas }}
