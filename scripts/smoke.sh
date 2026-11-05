@@ -58,7 +58,9 @@ echo "stock after: $after"
 
 echo "== metrics"
 for name in "${!BASES[@]}"; do
-  curl -fsS "${BASES[$name]}/metrics" | grep -q '^# HELP' || fail "no metrics from $name"
+  # capture first: `curl | grep -q` under pipefail fails with SIGPIPE when grep exits early
+  body=$(curl -fsS "${BASES[$name]}/metrics") || fail "no metrics from $name"
+  grep -q '^# HELP' <<<"$body" || fail "no metrics from $name"
   echo "metrics ok: $name"
 done
 echo "SMOKE OK"
