@@ -1,0 +1,3 @@
+Rush Hour installed as "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+  kubectl -n {{ .Release.Namespace }} get pods,hpa
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "rh.fullname" . }}-catalog 8001:8000

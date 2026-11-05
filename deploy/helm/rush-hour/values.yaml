@@ -1,0 +1,147 @@
+# Defaults for a small demo cluster. values-ci.yaml overrides them for kind in GitHub Actions.
+
+image:
+  repository: ghcr.io/omaraldulimay/rush-hour # <repository>/<service>:<tag>
+  tag: main
+  pullPolicy: IfNotPresent
+
+# --- Database -----------------------------------------------------------------------------------
+# The password is never committed. Either point `existingSecret` at a Secret with the keys
+# `password` and `userlist.txt` (PgBouncer auth file), or leave both empty: the chart then
+# generates a random password once and keeps it across upgrades (lookup).
+database:
+  name: rushhour
+  user: rushhour
+  password: ""
+  existingSecret: ""
+  # Only used when postgres.enabled=false (RDS, Cloud SQL, ...): host of the real database.
+  host: ""
+  port: 5432
+  # asyncpg prepared-statement cache. PgBouncer in transaction mode hands every transaction to a
+  # different server connection, so cached named statements would not exist there. 0 = off.
+  statementCacheSize: 0
+  poolMin: 2
+  poolMax: 10
+
+# --- In-cluster data tier (demo only; in a real cloud this is RDS / ElastiCache) -------------------
+postgres:
+  enabled: true
+  image: postgres:16-alpine
+  storage: 1Gi
+  storageClass: ""
+  maxConnections: 100
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: "1", memory: 512Mi }
+
+redis:
+  enabled: true
+  image: redis:7-alpine
+  storage: 256Mi
+  storageClass: ""
+  externalUrl: "" # used when enabled=false, e.g. redis://my-elasticache:6379/0
+  resources:
+    requests: { cpu: 25m, memory: 32Mi }
+    limits: { cpu: 250m, memory: 128Mi }
+
+# --- PgBouncer (transaction pooling) in front of Postgres ------------------------------------------
+pgbouncer:
+  enabled: true
+  replicas: 2
+  # edoburu/pgbouncer v1.26.1-p0 (PgBouncer 1.26.1), pinned by digest
+  image: edoburu/pgbouncer@sha256:488422e38cff912895d0d65d8963fcd306e6ac589a724398b6eb8e294e94d624
+  poolMode: transaction
+  maxClientConn: 1000
+  defaultPoolSize: 20 # server connections per PgBouncer pod and database/user pair
+  resources:
+    requests: { cpu: 25m, memory: 32Mi }
+    limits: { cpu: 500m, memory: 128Mi }
+
+# --- Migrations (Helm hook: runs before anything else is created or upgraded) ----------------------
+migrate:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 600
+  activeDeadlineSeconds: 300
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 256Mi }
+
+# --- Shared application configuration (becomes the ConfigMap) -----------------------------------------
+config: {}
+
+# --- Services --------------------------------------------------------------------------------------
+# key = service name = image name. `db`/`redis`/`urls` select which shared settings a service gets.
+services:
+  catalog:
+    db: true
+    redis: true
+    replicas: 2 # ignored while autoscaling is on
+    nodePort: null
+    pdb: true
+    env: { CACHE_TTL_S: "30" }
+    resources:
+      requests: { cpu: 100m, memory: 96Mi }
+      limits: { cpu: 500m, memory: 192Mi }
+    autoscaling: { enabled: true, minReplicas: 2, maxReplicas: 6, targetCPUUtilization: 60 }
+  inventory:
+    db: true
+    replicas: 2
+    nodePort: null
+    pdb: true
+    resources:
+      requests: { cpu: 100m, memory: 96Mi }
+      limits: { cpu: 500m, memory: 192Mi }
+    autoscaling: { enabled: true, minReplicas: 2, maxReplicas: 4, targetCPUUtilization: 60 }
+  checkout:
+    db: true
+    redis: true
+    urls: true
+    replicas: 2
+    nodePort: null
+    pdb: true
+    resources:
+      requests: { cpu: 100m, memory: 96Mi }
+      limits: { cpu: 500m, memory: 192Mi }
+    autoscaling: { enabled: true, minReplicas: 2, maxReplicas: 6, targetCPUUtilization: 60 }
+  payment-mock:
+    replicas: 1 # fault-injection state lives in memory, so a single replica keeps it consistent
+    nodePort: null
+    pdb: false
+    env:
+      PAYMENT_LATENCY_MS: "0"
+      PAYMENT_ERROR_RATE: "0"
+      PAYMENT_DECLINE_RATE: "0.02"
+    resources:
+      requests: { cpu: 25m, memory: 64Mi }
+      limits: { cpu: 250m, memory: 128Mi }
+    autoscaling: { enabled: false }
+  order-worker:
+    db: true
+    redis: true
+    urls: true
+    replicas: 1 # sweeper and stream consumer are safe to run twice, one is enough for the demo
+    nodePort: null
+    pdb: false
+    resources:
+      requests: { cpu: 50m, memory: 96Mi }
+      limits: { cpu: 500m, memory: 192Mi }
+    autoscaling: { enabled: false }
+
+# Rolling updates, graceful shutdown and probes shared by all services.
+rollout:
+  terminationGracePeriodSeconds: 30
+  # Endpoint removal and kube-proxy updates are asynchronous: keep serving for a few seconds after
+  # the pod is marked terminating, then let uvicorn drain on SIGTERM.
+  preStopSleepSeconds: 5
+
+# Black Friday behaviour: scale up immediately, scale down slowly (see templates/hpa.yaml).
+autoscaling:
+  scaleUp:
+    stabilizationWindowSeconds: 0
+    percentPerPeriod: 100
+    podsPerPeriod: 2
+    periodSeconds: 15
+  scaleDown:
+    stabilizationWindowSeconds: 300
+    percentPerPeriod: 25
+    periodSeconds: 60

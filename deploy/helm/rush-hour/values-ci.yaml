@@ -1,0 +1,22 @@
+# kind in GitHub Actions: images are loaded into the nodes (no pulls from GHCR), services are
+# reachable on the NodePorts that deploy/kind/cluster.yaml maps to localhost:8001-8005.
+image:
+  repository: ghcr.io/omaraldulimay/rush-hour
+  pullPolicy: IfNotPresent # --set image.tag=sha-<short> is passed by the workflow
+
+services:
+  catalog:
+    nodePort: 30001
+  inventory:
+    nodePort: 30002
+  checkout:
+    nodePort: 30003
+  payment-mock:
+    nodePort: 30004
+    env:
+      PAYMENT_DECLINE_RATE: "0" # a declined payment is not a failed request, but keeps the numbers clean
+  order-worker:
+    nodePort: 30005
+
+postgres:
+  storage: 512Mi

@@ -1,0 +1,68 @@
+{{- if .Values.redis.enabled }}
+{{- $name := printf "%s-redis" (include "rh.fullname" .) }}
+{{- $ctx := dict "root" . "name" "redis" }}
+# Demo-only Redis (carts, catalog cache, order stream). In a real cloud: ElastiCache.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "rh.labels" $ctx | nindent 4 }}
+spec:
+  selector:
+    {{- include "rh.selector" $ctx | nindent 4 }}
+  ports:
+    - { name: redis, port: 6379, targetPort: redis }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "rh.labels" $ctx | nindent 4 }}
+spec:
+  serviceName: {{ $name }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "rh.selector" $ctx | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "rh.labels" $ctx | nindent 8 }}
+    spec:
+      securityContext:
+        {{- include "rh.podSecurity" . | nindent 8 }}
+        runAsUser: 999
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: redis
+          image: {{ .Values.redis.image }}
+          args: ["redis-server", "--appendonly", "yes", "--dir", "/data"]
+          ports:
+            - { name: redis, containerPort: 6379 }
+          readinessProbe:
+            exec: { command: ["redis-cli", "ping"] }
+            periodSeconds: 5
+          livenessProbe:
+            exec: { command: ["redis-cli", "ping"] }
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.redis.resources | nindent 12 }}
+          securityContext:
+            {{- include "rh.containerSecurity" . | nindent 12 }}
+          volumeMounts:
+            - { name: data, mountPath: /data }
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.redis.storageClass }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.redis.storage }}
+{{- end }}

@@ -1,0 +1,152 @@
+{{- $full := include "rh.fullname" . }}
+{{- range $name, $svc := .Values.services }}
+{{- $ctx := dict "root" $ "name" $name }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $full }}-{{ $name }}
+  labels:
+    {{- include "rh.labels" $ctx | nindent 4 }}
+spec:
+  type: {{ if $svc.nodePort }}NodePort{{ else }}ClusterIP{{ end }}
+  selector:
+    {{- include "rh.selector" $ctx | nindent 4 }}
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+      {{- if $svc.nodePort }}
+      nodePort: {{ $svc.nodePort }}
+      {{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $full }}-{{ $name }}
+  labels:
+    {{- include "rh.labels" $ctx | nindent 4 }}
+spec:
+  {{- /* with an HPA the autoscaler owns replicas; setting them here would reset it on every upgrade */}}
+  {{- if not (and $svc.autoscaling $svc.autoscaling.enabled) }}
+  replicas: {{ $svc.replicas }}
+  {{- end }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }
+  selector:
+    matchLabels:
+      {{- include "rh.selector" $ctx | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "rh.labels" $ctx | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") $ | sha256sum }}
+    spec:
+      terminationGracePeriodSeconds: {{ $.Values.rollout.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- include "rh.podSecurity" $ | nindent 8 }}
+        runAsUser: 10001
+        runAsGroup: 10001
+      {{- include "rh.spread" $ctx | nindent 6 }}
+      containers:
+        - name: {{ $name }}
+          image: {{ $.Values.image.repository }}/{{ $name }}:{{ $.Values.image.tag }}
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          ports:
+            - { name: http, containerPort: 8000 }
+          envFrom:
+            - configMapRef: { name: {{ $full }}-config }
+          env:
+            {{- if $svc.db }}
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: {{ include "rh.dbSecret" $ }}, key: password }
+            # $(DB_PASSWORD) is expanded by Kubernetes; services go through PgBouncer
+            - name: DATABASE_URL
+              value: "postgresql://{{ $.Values.database.user }}:$(DB_PASSWORD)@{{ include "rh.pgAppHost" $ }}:{{ $.Values.database.port }}/{{ $.Values.database.name }}"
+            {{- end }}
+            {{- range $k, $v := $svc.env }}
+            - { name: {{ $k }}, value: {{ $v | quote }} }
+            {{- end }}
+          # Slow start (imports, first DB connections): liveness/readiness only begin once this passes.
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 2
+          lifecycle:
+            preStop:
+              exec: { command: ["sleep", {{ $.Values.rollout.preStopSleepSeconds | quote }}] }
+          resources:
+            {{- toYaml $svc.resources | nindent 12 }}
+          securityContext:
+            {{- include "rh.containerSecurity" $ | nindent 12 }}
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - { name: tmp, emptyDir: {} }
+{{- if $svc.pdb }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $full }}-{{ $name }}
+  labels:
+    {{- include "rh.labels" $ctx | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "rh.selector" $ctx | nindent 6 }}
+{{- end }}
+{{- if and $svc.autoscaling $svc.autoscaling.enabled }}
+---
+# Black Friday: scale UP immediately (no stabilisation, up to double or +N pods every 15 s) because
+# the peak hits at 00:00 and every second of lag is lost orders. Scale DOWN slowly (5 minute window,
+# at most 25 % per minute) so a short dip between two waves does not remove the capacity we need
+# again 30 seconds later (flapping would also mean cold pods and reconnect storms on the database).
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ $full }}-{{ $name }}
+  labels:
+    {{- include "rh.labels" $ctx | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ $full }}-{{ $name }}
+  minReplicas: {{ $svc.autoscaling.minReplicas }}
+  maxReplicas: {{ $svc.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ $svc.autoscaling.targetCPUUtilization }}
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: {{ $.Values.autoscaling.scaleUp.stabilizationWindowSeconds }}
+      selectPolicy: Max
+      policies:
+        - { type: Percent, value: {{ $.Values.autoscaling.scaleUp.percentPerPeriod }}, periodSeconds: {{ $.Values.autoscaling.scaleUp.periodSeconds }} }
+        - { type: Pods, value: {{ $.Values.autoscaling.scaleUp.podsPerPeriod }}, periodSeconds: {{ $.Values.autoscaling.scaleUp.periodSeconds }} }
+    scaleDown:
+      stabilizationWindowSeconds: {{ $.Values.autoscaling.scaleDown.stabilizationWindowSeconds }}
+      selectPolicy: Min
+      policies:
+        - { type: Percent, value: {{ $.Values.autoscaling.scaleDown.percentPerPeriod }}, periodSeconds: {{ $.Values.autoscaling.scaleDown.periodSeconds }} }
+{{- end }}
+{{- end }}

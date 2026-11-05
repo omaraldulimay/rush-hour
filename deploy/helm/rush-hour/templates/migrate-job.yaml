@@ -1,0 +1,59 @@
+# Runs before any normal resource is created or upgraded, so services never start (or roll out a new
+# version) against an unmigrated schema. It connects to Postgres directly: migrations use an advisory
+# lock, which does not work through a transaction pooler.
+{{- $name := printf "%s-migrate" (include "rh.fullname" .) }}
+{{- $ctx := dict "root" . "name" "migrate" }}
+{{- $host := include "rh.pgDirectHost" . }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "rh.labels" $ctx | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: {{ .Values.migrate.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migrate.activeDeadlineSeconds }}
+  ttlSecondsAfterFinished: {{ .Values.migrate.ttlSecondsAfterFinished }}
+  template:
+    metadata:
+      labels:
+        {{- include "rh.labels" $ctx | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      securityContext:
+        {{- include "rh.podSecurity" . | nindent 8 }}
+        runAsUser: 10001
+        runAsGroup: 10001
+      initContainers:
+        # The in-cluster Postgres is created by a hook too and may still be starting.
+        - name: wait-for-postgres
+          image: {{ .Values.postgres.image }}
+          command: ["sh", "-c", "until pg_isready -h {{ $host }} -p {{ .Values.database.port }} -U {{ .Values.database.user }} -d {{ .Values.database.name }}; do echo waiting for postgres; sleep 2; done"]
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { cpu: 100m, memory: 64Mi }
+          securityContext:
+            {{- include "rh.containerSecurity" . | nindent 12 }}
+      containers:
+        - name: migrate
+          image: {{ .Values.image.repository }}/catalog:{{ .Values.image.tag }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["sh", "-c", "python -m libs.common.migrate && python -m scripts.seed"]
+          env:
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: {{ include "rh.dbSecret" . }}, key: password }
+            - name: DATABASE_URL
+              value: "postgresql://{{ .Values.database.user }}:$(DB_PASSWORD)@{{ $host }}:{{ .Values.database.port }}/{{ .Values.database.name }}"
+          resources:
+            {{- toYaml .Values.migrate.resources | nindent 12 }}
+          securityContext:
+            {{- include "rh.containerSecurity" . | nindent 12 }}
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - { name: tmp, emptyDir: {} }
