@@ -309,9 +309,14 @@ jobs:
             --set postgres.enabled=false --set database.host=db.example.com \
             --set redis.enabled=false --set redis.externalUrl=redis://cache.example.com:6379/0 \
             > rendered-external.yaml
-          for f in rendered-ci.yaml rendered-external.yaml; do
-            kubeconform -strict -summary -kubernetes-version 1.34.0 -skip ServiceMonitor,PrometheusRule "$f"
+          helm template rush-hour deploy/helm/rush-hour -f deploy/helm/rush-hour/values-ci.yaml \
+            --set rollout.enabled=true > rendered-rollout.yaml
+          for f in rendered-ci.yaml rendered-external.yaml rendered-rollout.yaml; do
+            kubeconform -strict -summary -kubernetes-version 1.34.0 \
+              -skip ServiceMonitor,PrometheusRule,Rollout,AnalysisTemplate "$f"
           done
+          grep -c 'kind: Rollout' rendered-rollout.yaml
+          grep -c 'kind: AnalysisTemplate' rendered-rollout.yaml
           # HPA and PDB must really be in the output (kubeconform skips what it does not know)
           grep -c 'kind: HorizontalPodAutoscaler' rendered-ci.yaml
           grep -c 'kind: PodDisruptionBudget' rendered-ci.yaml
@@ -320,12 +325,6 @@ jobs:
     needs: [build, chart]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    env:
-      KIND_NODE_IMAGE: kindest/node:v1.36.4@sha256:099e049362a1526b2db71494e1947aae99bd16290d7c895f2b7ea312e3cbfaed
-      METRICS_SERVER_URL: https://github.com/kubernetes-sigs/metrics-server/releases/download/v0.9.1/components.yaml
-      METRICS_SERVER_SHA256: 3c7f57cdbee0f57fb0259a150e8f6d6cb4f29d72d1aa5dce8803151dd6d4c2a1
-      KPS_VERSION: 92.9.0
-      KPS_SHA256: d99bc9dca70d8a2844e59ca18e589bfd69014b5c46d0be05ba8587932048b07f
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -334,27 +333,10 @@ jobs:
           path: ${{ runner.temp }}/images
       - name: Install helm, kind and k6 (pinned, checksum-verified)
         run: ./scripts/k8s/install-tools.sh helm kind k6
-      - name: Create kind cluster (1 control plane + 2 workers)
-        run: kind create cluster --name rush-hour --config deploy/kind/cluster.yaml --image "$KIND_NODE_IMAGE" --wait 180s
-      - name: Load the images built in this run into the nodes
-        run: |
-          for svc in catalog inventory checkout payment_mock order_worker control_room; do
-            kind load image-archive "${RUNNER_TEMP}/images/image-${svc}/image.tar" --name rush-hour
-          done
-      - name: Install metrics-server (pinned; kubelet TLS check off because kind uses self-signed certs)
-        run: |
-          curl -fsSL --retry 3 -o metrics-server.yaml "$METRICS_SERVER_URL"
-          echo "$METRICS_SERVER_SHA256  metrics-server.yaml" | sha256sum -c -
-          kubectl apply -f metrics-server.yaml
-          kubectl -n kube-system patch deployment metrics-server --type=json \
-            -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]'
-          kubectl -n kube-system rollout status deployment/metrics-server --timeout=180s
-      - name: Install kube-prometheus-stack (pinned chart, checksum-verified; light values)
-        run: |
-          curl -fsSL --retry 3 -o kps.tgz "https://github.com/prometheus-community/helm-charts/releases/download/kube-prometheus-stack-${KPS_VERSION}/kube-prometheus-stack-${KPS_VERSION}.tgz"
-          echo "$KPS_SHA256  kps.tgz" | sha256sum -c -
-          helm upgrade --install prom kps.tgz --namespace monitoring --create-namespace \
-            -f deploy/observability/values-ci.yaml --wait --timeout 8m
+      - name: Cluster - kind, images, metrics-server, kube-prometheus-stack (scripts/k8s/cluster-up.sh)
+        env:
+          IMAGES_DIR: ${{ runner.temp }}/images
+        run: ./scripts/k8s/cluster-up.sh
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
@@ -383,8 +365,7 @@ jobs:
         run: ./scripts/smoke.sh
       - name: Load burst, HPA scale-up and pod kill (with SLO proof and screenshots during the load)
         run: |
-          kubectl port-forward svc/rush-hour-control-room 8080:8000 >/dev/null 2>&1 &
-          sleep 3
+          ./scripts/k8s/port-forward.sh control-room rush-hour-control-room 8080:8000
           export REPORT="$PWD/load-report.md" OUT="$PWD/load-out"
           rc=0
           ./scripts/k8s/run-load.sh & load=$!
@@ -397,8 +378,7 @@ jobs:
       - name: Fault injection proof - payment down, PaymentBreakerOpen must fire and recover
         run: |
           # the port-forward of the previous step ended with that step
-          kubectl port-forward svc/rush-hour-control-room 8080:8000 >/dev/null 2>&1 &
-          sleep 3
+          ./scripts/k8s/port-forward.sh control-room rush-hour-control-room 8080:8000
           CONTROL_ROOM_URL=http://127.0.0.1:8080 OBS_REPORT=obs-report.md \
             python scripts/k8s/obs_proof.py fault \
             --on-firing "python scripts/k8s/screenshots.py --out shots --tag incident --only sale-night,control-room || true"
@@ -408,6 +388,7 @@ jobs:
           name: screenshots
           path: |
             shots/
+            port-forward-*.log
             obs-report.md
             load-report.md
           if-no-files-found: warn
@@ -422,6 +403,7 @@ jobs:
           for p in $(kubectl get pods --no-headers -o name); do
             echo "::group::logs $p"; kubectl logs "$p" --all-containers --tail=300 --prefix 2>&1 | grep -vE '"GET /(healthz|readyz)' | tail -80 || true; echo "::endgroup::"
           done
+          for f in port-forward-*.log; do [ -f "$f" ] && { echo "::group::$f"; cat "$f"; echo "::endgroup::"; }; done || true
           [ -f diag/install.log ] && tail -150 diag/install.log || true
       - name: Delete the cluster
         if: always()
