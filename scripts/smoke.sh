@@ -1,14 +1,22 @@
 #!/usr/bin/env bash
-# End-to-end check against a running compose stack (make up): browse, cart, checkout, stock, metrics.
+# End-to-end check against a running stack: browse, cart, checkout, stock, metrics.
+# Defaults to the docker compose ports on 127.0.0.1 (make up). Override with HOST and/or the full
+# base URLs CATALOG_URL, INVENTORY_URL, CHECKOUT_URL, PAYMENT_MOCK_URL, ORDER_WORKER_URL.
 set -euo pipefail
 
-declare -A PORTS=([catalog]=8001 [inventory]=8002 [checkout]=8003 [payment-mock]=8004 [order-worker]=8005)
 HOST=${HOST:-127.0.0.1}
+declare -A BASES=(
+  [catalog]=${CATALOG_URL:-http://$HOST:8001}
+  [inventory]=${INVENTORY_URL:-http://$HOST:8002}
+  [checkout]=${CHECKOUT_URL:-http://$HOST:8003}
+  [payment-mock]=${PAYMENT_MOCK_URL:-http://$HOST:8004}
+  [order-worker]=${ORDER_WORKER_URL:-http://$HOST:8005}
+)
 fail() { echo "SMOKE FAILED: $*" >&2; exit 1; }
 
 echo "== waiting for /readyz"
-for name in "${!PORTS[@]}"; do
-  url="http://$HOST:${PORTS[$name]}/readyz"
+for name in "${!BASES[@]}"; do
+  url="${BASES[$name]}/readyz"
   for i in $(seq 1 60); do
     curl -fsS -o /dev/null "$url" 2>/dev/null && break
     [ "$i" = 60 ] && fail "$name not ready at $url"
@@ -17,7 +25,7 @@ for name in "${!PORTS[@]}"; do
   echo "ready: $name"
 done
 
-CATALOG=http://$HOST:8001 INVENTORY=http://$HOST:8002 CHECKOUT=http://$HOST:8003
+CATALOG=${BASES[catalog]} INVENTORY=${BASES[inventory]} CHECKOUT=${BASES[checkout]}
 
 echo "== list products"
 products=$(curl -fsS "$CATALOG/products?category=sneakers&limit=100")
@@ -49,8 +57,8 @@ echo "stock after: $after"
 [ "$after" -eq $((before - qty)) ] || fail "expected stock $((before - qty)), got $after"
 
 echo "== metrics"
-for name in "${!PORTS[@]}"; do
-  curl -fsS "http://$HOST:${PORTS[$name]}/metrics" | grep -q '^# HELP' || fail "no metrics from $name"
+for name in "${!BASES[@]}"; do
+  curl -fsS "${BASES[$name]}/metrics" | grep -q '^# HELP' || fail "no metrics from $name"
   echo "metrics ok: $name"
 done
 echo "SMOKE OK"
