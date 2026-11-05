@@ -24,7 +24,7 @@ make down    # stop and delete volumes
 | checkout | 8003 |
 | payment-mock | 8004 |
 | order-worker (ops endpoints only) | 8005 |
-| control-room (UI), prometheus | 8080, 9090 |
+| control-room (UI), prometheus, grafana, alertmanager | 8080, 9090, 3000, 9093 |
 
 No Docker? `make local` runs everything as plain processes (Postgres, Redis, Prometheus, the services
 and the Control Room at http://localhost:8080): [docs/local.md](docs/local.md).
@@ -82,8 +82,15 @@ delete it afterwards. Redis is `fakeredis` unless `REDIS_URL` is set.
 | `scan` | Trivy finds no fixable CRITICAL/HIGH vulnerabilities in any image; results go to code scanning |
 | `smoke` | The stack started from the just-built images works end to end (`scripts/smoke.sh`: browse, cart, checkout, paid order, stock decreased, `/metrics`) |
 | `chart` | `helm lint --strict` and `helm template \| kubeconform -strict` pass (with and without the in-cluster data tier) |
-| `k8s` | A kind cluster (1 control plane + 2 workers) runs the chart with the just-built images: migration hook, PgBouncer, `scripts/smoke.sh`, then a k6 load burst. The HPAs must scale `catalog` above its minimum; one catalog pod is deleted under load. The replica/CPU table and the error rates are in the job summary |
+| `k8s` | A kind cluster (1 control plane + 2 workers) runs the chart with the just-built images: migration hook, PgBouncer, `scripts/smoke.sh`, then a k6 load burst. kube-prometheus-stack runs next to it: SLO recording rules must have data and be within target during the load, then `payment-mock` is taken down and `PaymentBreakerOpen` must fire and resolve again (timeline in the job summary). Grafana and Control Room screenshots are uploaded as an artifact. The HPAs must scale `catalog` above its minimum; one catalog pod is deleted under load. The replica/CPU table and the error rates are in the job summary |
+| `observability` | `promtool check` and `promtool test rules`: every SLO rule and alert is unit-tested with its real `for:` durations |
 | `sign` (main) | Each pushed image has an SPDX SBOM attestation and a keyless cosign signature that is verified against this workflow's identity; only runs if the images also survived Kubernetes (`k8s`) |
+
+## Observability
+
+SLOs, burn-rate alerts, runbooks and four Grafana dashboards (shop overview, SLOs, sale night, data tier): [docs/architecture.md#observability](docs/architecture.md#observability). Grafana runs in compose (http://localhost:3000), with `make local` and in the k8s CI job.
+
+![Grafana: shop overview during a rush hour](docs/screenshots/grafana-overview.png)
 
 Action versions are pinned to commit SHAs; Dependabot updates them weekly (plus pip and Docker).
 

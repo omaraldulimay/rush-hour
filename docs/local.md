@@ -16,6 +16,8 @@ Open **http://localhost:8080** (the Control Room) and press *Start rush hour*.
 |---|---|
 | Control Room (UI + demo admin API) | http://localhost:8080 |
 | Prometheus | http://localhost:9090 |
+| Grafana (4 dashboards, anonymous Viewer, admin / admin) | http://localhost:3000 |
+| Alertmanager | http://localhost:9093 |
 | catalog, inventory, checkout, payment-mock, order-worker | 8001, 8002, 8003, 8004, 8005 |
 | Postgres 16 (own cluster, user/db `rushhour`) | 127.0.0.1:55432 |
 | Redis | 127.0.0.1:56379 |
@@ -69,3 +71,11 @@ API: `GET /api/state`, `GET /api/series`, `POST /api/rush/start|stop`, `POST /ap
 `POST /api/reset-stock`. It is a demo admin panel without authentication: it listens on localhost,
 refuses cross-origin POSTs, and in Kubernetes it is a ClusterIP service (use `kubectl port-forward`).
 Environment: `PROMETHEUS_URL`, `CATALOG_URL`, `CHECKOUT_URL`, `PAYMENT_URL`, `DATABASE_URL`.
+
+## Grafana, alerts and rules
+
+`make local` also starts Alertmanager and Grafana (official `darwin-amd64` tarballs, SHA-256 pinned in
+`scripts/local/stack.py`, first start downloads about 500 MB). Prometheus loads
+`observability/prometheus/rules/`. A Prometheus that is already running does not pick up the rules by itself:
+run `make local-stop && make local` once. To start only Grafana and Alertmanager next to a running stack:
+`.venv/bin/python -m scripts.local.stack observability`. Ports: `GRAFANA_PORT`, `ALERTMANAGER_PORT`.
