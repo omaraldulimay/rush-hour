@@ -89,6 +89,55 @@ returns the existing reservation instead of reserving twice.
   Kubernetes this becomes a Job that runs before the rollout.
 - One Dockerfile for all services (build argument `SERVICE`), non-root user, small image.
 
+## Kubernetes
+
+Helm chart `deploy/helm/rush-hour` (one chart for the whole shop), tested on kind with 1 control plane and 2 workers.
+
+| What | Where |
+|---|---|
+| catalog, inventory, checkout | Deployments with 2+ replicas, spread over nodes, PodDisruptionBudget `minAvailable: 1`, HPA on CPU |
+| payment-mock, order-worker | Deployments with 1 replica (fault state in memory / no HTTP load), no HPA |
+| PgBouncer | 2 replicas, transaction pooling; **every service connects to it**, not to Postgres |
+| Postgres 16, Redis 7 | StatefulSets with PVCs, official images, **demo only** (RDS / ElastiCache in step 7: `postgres.enabled=false`) |
+| migrations + seed | Helm hook Job (`pre-install,pre-upgrade`), connects to Postgres directly |
+
+All pods run non-root with a read-only root filesystem (an `emptyDir` for `/tmp`), no capabilities,
+no privilege escalation and the `RuntimeDefault` seccomp profile. Probes: `startupProbe` and
+liveness on `/healthz`, readiness on `/readyz`. On shutdown a 5 s `preStop` sleep keeps the pod
+serving while the Service endpoint is removed, then uvicorn drains on SIGTERM.
+
+**Ordering.** Helm hooks run before normal resources: the DB Secret, then the in-cluster Postgres
+(install only, Helm never touches it again) and then the migration Job (which waits for Postgres
+with `pg_isready`). Services and PgBouncer are created after the Job succeeded, so nothing serves
+traffic on an unmigrated schema, also not during an upgrade.
+
+**Why PgBouncer.** Every replica holds a pool of up to 10 connections. With the HPA at 6+6+4
+replicas that is well over 100 connections, which Postgres cannot serve (each is a process). PgBouncer
+multiplexes them onto 20 server connections per pod. In `transaction` mode a server connection is
+only held for one transaction, which is the mode that actually saves connections.
+What this costs:
+
+- asyncpg caches named prepared statements per connection. The next transaction may run on another
+  server connection where the statement does not exist, so `DB_STATEMENT_CACHE_SIZE=0` is set by the
+  chart (`statement_cache_size=0`). Compose and the tests keep asyncpg's default.
+- Session state does not survive between transactions. Checked in the code: no `LISTEN/NOTIFY`, no
+  `SET`/`set_config`, no temp tables, no cursors and no advisory locks in the services. The
+  `FOR UPDATE SKIP LOCKED` claims in `libs/common/orders_db.py` are single statements (the
+  `UPDATE ... WHERE order_id IN (SELECT ... FOR UPDATE SKIP LOCKED)` runs in its own implicit
+  transaction) and the stock reservation is one explicit transaction, so both are safe with pooling.
+  The only advisory lock is the migration lock in `libs/common/migrate.py`: session-level, so the
+  migration Job bypasses PgBouncer.
+
+**Why this HPA behaviour.** Scale up has no stabilisation window and may double the pods or add 2
+every 15 s: the peak starts at 00:00 and each second of lag is lost orders. Scale down waits 5
+minutes and removes at most 25 % per minute: a short dip between two waves must not remove capacity
+that is needed again 30 s later (flapping means cold pods and reconnect storms on the database).
+CPU utilisation is measured against the CPU *request* (100m), so the targets are small on purpose.
+
+**Only for the demo / not done.** In-cluster Postgres and Redis (single replica, no backups, no
+failover); the generated password lives in a Secret (a real cloud would use a secret manager); no
+Ingress, TLS or NetworkPolicies; the HPAs scale on CPU only.
+
 ## Seed data
 
 2,000 products across categories (sneakers, jackets, knitwear, accessories) with realistic prices
