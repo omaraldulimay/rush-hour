@@ -5,7 +5,7 @@ RDS Postgres 16 (Multi-AZ, encrypted, password in Secrets Manager) and ElastiCac
 Only the EKS nodes can reach RDS and Redis. Images stay on GHCR, so there is no ECR.
 
 **Validate-only on purpose:** CI runs `terraform fmt`, `validate` and `trivy config`. Nothing is applied, no state, no credentials.
-Rough cost if it were applied (estimate, eu-central-1, on-demand): about 450 USD/month (nodes 3 x ~100, EKS ~75, NAT ~40, RDS Multi-AZ ~150, Valkey 2 x ~25).
+Rough cost if it were applied (estimate, eu-central-1, on-demand): about 600 USD/month (nodes 3 x ~100, EKS ~75, NAT ~40, RDS Multi-AZ ~150, Valkey 2 x ~25).
 
 Plug the outputs into the chart (the Secrets Manager secret must be synced into a Secret with the keys
 `password` and `userlist.txt`, e.g. with External Secrets, and named in `database.existingSecret`):
