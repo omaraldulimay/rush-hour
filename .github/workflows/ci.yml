@@ -396,6 +396,9 @@ jobs:
           exit $rc
       - name: Fault injection proof - payment down, PaymentBreakerOpen must fire and recover
         run: |
+          # the port-forward of the previous step ended with that step
+          kubectl port-forward svc/rush-hour-rush-hour-control-room 8080:8000 >/dev/null 2>&1 &
+          sleep 3
           CONTROL_ROOM_URL=http://127.0.0.1:8080 OBS_REPORT=obs-report.md \
             python scripts/k8s/obs_proof.py fault \
             --on-firing "python scripts/k8s/screenshots.py --out shots --tag incident --only sale-night,control-room || true"
