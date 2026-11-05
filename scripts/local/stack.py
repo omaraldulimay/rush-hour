@@ -28,7 +28,20 @@ PG_DATA, REDIS_DIR, PROM_DIR = LOCAL / "pg", LOCAL / "redis", LOCAL / "prom"
 PG_BIN = Path(os.environ.get("PG_BIN", "/Library/PostgreSQL/16/bin"))
 
 PG_PORT, REDIS_PORT, PROM_PORT = 55432, 56379, 9090
+AM_PORT = int(os.environ.get("ALERTMANAGER_PORT", "9093"))
+GRAFANA_PORT = int(os.environ.get("GRAFANA_PORT", "3000"))
 PROMETHEUS_VERSION = "3.15.1"  # latest stable at the time of writing (gh api .../releases/latest)
+# Pinned downloads (darwin-amd64): version + SHA-256 of the tarball, committed here on purpose.
+ALERTMANAGER_VERSION = "0.34.2"
+ALERTMANAGER_SHA256 = "fa5a50303c58771c261fcbed4cf5f9a852cf2c6064942adbd92c6859c65c5f93"
+GRAFANA_VERSION = "13.3.0"
+GRAFANA_SHA256 = "8bc7537851e84758fbf5ea545db4eac22f943412652df4e83062077362528579"
+OBS = ROOT / "observability"
+AM_DIR, GRAFANA_DIR, GRAFANA_DATA = (
+    LOCAL / "alertmanager",
+    LOCAL / "grafana",
+    LOCAL / "grafana-data",
+)
 PROM_CONFIG = ROOT / "observability/prometheus/prometheus.local.yml"
 DATABASE_URL = f"postgresql://rushhour:rushhour@127.0.0.1:{PG_PORT}/rushhour"
 REDIS_URL = f"redis://127.0.0.1:{REDIS_PORT}/0"
@@ -301,6 +314,108 @@ def start_prometheus() -> None:
     )  # fmt: skip
 
 
+def download_verified(url: str, sha256: str, dest: Path) -> None:
+    """Download `url` to `dest` and refuse it unless it has the SHA-256 that is pinned here."""
+    say(f"downloading {url.rsplit('/', 1)[-1]}")
+    urllib.request.urlretrieve(url, dest)
+    digest = hashlib.sha256()
+    with open(dest, "rb") as fh:
+        while chunk := fh.read(1 << 20):
+            digest.update(chunk)
+    if digest.hexdigest() != sha256:
+        dest.unlink(missing_ok=True)
+        die(f"checksum mismatch for {dest.name}: expected {sha256}, got {digest.hexdigest()}")
+    say("checksum verified against the pinned SHA-256")
+
+
+def alertmanager_binary() -> Path:
+    target = BIN / "alertmanager"
+    if target.exists():
+        return target
+    name = f"alertmanager-{ALERTMANAGER_VERSION}.darwin-amd64.tar.gz"
+    base = f"https://github.com/prometheus/alertmanager/releases/download/v{ALERTMANAGER_VERSION}"
+    BIN.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=LOCAL) as tmp:
+        archive = Path(tmp) / name
+        download_verified(f"{base}/{name}", ALERTMANAGER_SHA256, archive)
+        with tarfile.open(archive) as tar:
+            for member in tar.getmembers():
+                if Path(member.name).name in ("alertmanager", "amtool") and member.isfile():
+                    member.name = Path(member.name).name
+                    tar.extract(member, BIN, filter="data")
+    target.chmod(0o755)
+    return target
+
+
+def grafana_home() -> Path:
+    home = GRAFANA_DIR / f"grafana-{GRAFANA_VERSION}"
+    if (home / "bin" / "grafana").exists():
+        return home
+    name = f"grafana-{GRAFANA_VERSION}.darwin-amd64.tar.gz"
+    GRAFANA_DIR.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=LOCAL) as tmp:
+        archive = Path(tmp) / name
+        download_verified(f"https://dl.grafana.com/oss/release/{name}", GRAFANA_SHA256, archive)
+        say("unpacking Grafana (about 1 GB, once)")
+        with tarfile.open(archive) as tar:
+            tar.extractall(GRAFANA_DIR, filter="data")
+    return home
+
+
+def warn_port(proc: Proc) -> bool:
+    say(f"WARNING: port {proc.port} is taken, {proc.name} not started (set its *_PORT variable)")
+    return False
+
+
+def start_optional(proc: Proc, argv: list[str], env: dict[str, str] | None = None) -> bool:
+    """Extras: a foreign process on their port must not stop `make local`."""
+    if not proc.alive() and port_open(proc.port):
+        return warn_port(proc)
+    proc.start(argv, env)
+    return True
+
+
+def start_alertmanager() -> None:
+    AM_DIR.mkdir(parents=True, exist_ok=True)
+    start_optional(
+        Proc("alertmanager", AM_PORT, "alertmanager"),
+        [str(alertmanager_binary()), f"--config.file={OBS / 'alertmanager/alertmanager.yml'}",
+         f"--storage.path={AM_DIR}", f"--web.listen-address=127.0.0.1:{AM_PORT}",
+         "--cluster.listen-address="],
+    )  # fmt: skip
+
+
+def start_grafana() -> None:
+    proc = Proc("grafana", GRAFANA_PORT, "grafana")
+    if not proc.alive() and port_open(GRAFANA_PORT):
+        warn_port(proc)
+        return
+    home = grafana_home()
+    GRAFANA_DATA.mkdir(parents=True, exist_ok=True)
+    dashboards = OBS / "grafana/dashboards"
+    env = {
+        "GF_PATHS_DATA": str(GRAFANA_DATA),
+        "GF_PATHS_LOGS": str(LOGS),
+        "GF_PATHS_PLUGINS": str(GRAFANA_DATA / "plugins"),
+        "GF_PATHS_PROVISIONING": str(OBS / "grafana/provisioning"),
+        "GF_SERVER_HTTP_ADDR": "127.0.0.1",
+        "GF_SERVER_HTTP_PORT": str(GRAFANA_PORT),
+        # Anyone on this machine may look (Viewer); changing things needs admin / admin.
+        "GF_AUTH_ANONYMOUS_ENABLED": "true",
+        "GF_AUTH_ANONYMOUS_ORG_ROLE": "Viewer",
+        "GF_PLUGINS_PREINSTALL_DISABLED": "true",
+        "GF_ANALYTICS_REPORTING_ENABLED": "false",
+        "GF_ANALYTICS_CHECK_FOR_UPDATES": "false",
+        "GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH": str(dashboards / "shop-overview.json"),
+        "PROMETHEUS_URL": f"http://127.0.0.1:{PROM_PORT}",
+        "GRAFANA_DASHBOARDS_DIR": str(dashboards),
+    }  # fmt: skip
+    proc.start(
+        [str(home / "bin" / "grafana"), "server", f"--homepath={home}"],
+        env,
+    )
+
+
 def run_python(*args: str) -> None:
     env = {**os.environ, **SERVICE_ENV, "PYTHONPATH": str(ROOT)}
     out = subprocess.run([sys.executable, *args], cwd=ROOT, env=env, capture_output=True, text=True)
@@ -330,6 +445,8 @@ def urls() -> dict[str, str]:
     return {
         "Control Room": "http://localhost:8080",
         "Prometheus": f"http://localhost:{PROM_PORT}",
+        "Grafana": f"http://localhost:{GRAFANA_PORT}",
+        "Alertmanager": f"http://localhost:{AM_PORT}",
         "catalog": "http://localhost:8001/products?limit=3",
         "inventory": "http://localhost:8002/stock/SNK-0001",
         "checkout": "http://localhost:8003/carts/demo",
@@ -351,6 +468,8 @@ def up() -> None:
     run_python("-m", "libs.common.migrate")
     run_python("-m", "scripts.seed")
     start_prometheus()
+    start_alertmanager()
+    start_grafana()
     for name in SERVICES:
         start_service(name)
     say("waiting for every /readyz ...")
@@ -361,6 +480,17 @@ def up() -> None:
         time.sleep(0.5)
     if pending or not ready(f"http://127.0.0.1:{PROM_PORT}/-/ready"):
         die(f"not ready: {', '.join(pending) or 'prometheus'} - see .local/logs/")
+    for name, port, path in (
+        ("alertmanager", AM_PORT, "/-/ready"),
+        ("grafana", GRAFANA_PORT, "/api/health"),
+    ):
+        if Proc(name, port, name).alive():
+            for _ in range(120):
+                if ready(f"http://127.0.0.1:{port}{path}"):
+                    break
+                time.sleep(0.5)
+            else:
+                say(f"WARNING: {name} is not ready yet, see .local/logs/{name}.log")
     print("\nEverything is up:")
     for label, url in urls().items():
         print(f"  {label:<13} {url}")
@@ -370,6 +500,8 @@ def up() -> None:
 def stop() -> None:
     for name in reversed(list(SERVICES)):
         Proc(name, SERVICES[name][1], "uvicorn").stop()
+    Proc("grafana", GRAFANA_PORT, "grafana").stop()
+    Proc("alertmanager", AM_PORT, "alertmanager").stop()
     Proc("prometheus", PROM_PORT, "prometheus").stop()
     for marker in ("redis-server", "valkey-server"):
         Proc("redis", REDIS_PORT, marker).stop()
@@ -384,6 +516,8 @@ def status() -> int:
     rows.append(
         ("prometheus", PROM_PORT, Proc("prometheus", PROM_PORT, "prometheus").alive() is not None)
     )
+    rows.append(("alertmanager", AM_PORT, ready(f"http://127.0.0.1:{AM_PORT}/-/ready")))
+    rows.append(("grafana", GRAFANA_PORT, ready(f"http://127.0.0.1:{GRAFANA_PORT}/api/health")))
     rows += [(n, p, ready(f"http://127.0.0.1:{p}/readyz")) for n, (_, p) in SERVICES.items()]
     for name, port, ok in rows:
         print(f"  {'up  ' if ok else 'DOWN'}  {name:<13} :{port}")
@@ -392,18 +526,26 @@ def status() -> int:
 
 def reset() -> None:
     stop()
-    for path in (PG_DATA, REDIS_DIR, PROM_DIR):
+    for path in (PG_DATA, REDIS_DIR, PROM_DIR, AM_DIR, GRAFANA_DATA):
         shutil.rmtree(path, ignore_errors=True)
     say("data wiped (.local/bin and logs are kept)")
 
 
+def observability() -> None:
+    """Start only Alertmanager and Grafana (e.g. next to an already running stack)."""
+    start_alertmanager()
+    start_grafana()
+    for label, url in list(urls().items())[2:4]:
+        print(f"  {label:<13} {url}")
+
+
 def main() -> None:
-    commands = {"up": up, "stop": stop, "reset": reset}
+    commands = {"up": up, "stop": stop, "reset": reset, "observability": observability}
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
     if cmd == "status":
         sys.exit(status())
     if cmd not in commands:
-        die("usage: python -m scripts.local.stack up | stop | status | reset")
+        die("usage: python -m scripts.local.stack up | stop | status | reset | observability")
     commands[cmd]()
 
 

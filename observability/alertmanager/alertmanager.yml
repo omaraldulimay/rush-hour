@@ -1,0 +1,25 @@
+# Routing by severity. The receivers have no integrations on purpose (no e-mail/Slack credentials
+# in a public demo): the Alertmanager UI shows where each alert would go. A real setup adds
+# pagerduty_configs / slack_configs / webhook_configs to `page` and `ticket`.
+route:
+  receiver: ticket
+  group_by: [alertname, slo]
+  group_wait: 10s
+  group_interval: 1m
+  repeat_interval: 4h
+  routes:
+    - matchers: [severity="critical"]
+      receiver: page
+    - matchers: [severity="info"]
+      receiver: timeline
+
+receivers:
+  - name: page      # wakes somebody up
+  - name: ticket    # next working day
+  - name: timeline  # only for the timeline / dashboards
+
+# A critical alert makes its warning twin redundant (same alertname and slo).
+inhibit_rules:
+  - source_matchers: [severity="critical"]
+    target_matchers: [severity="warning"]
+    equal: [alertname, slo]

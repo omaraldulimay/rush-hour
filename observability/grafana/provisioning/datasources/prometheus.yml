@@ -1,0 +1,15 @@
+# Used by docker compose and `make local` (Kubernetes provisions the same datasource through the
+# kube-prometheus-stack Grafana sidecar). The dashboards never reference this uid directly: they
+# pick the datasource through a $datasource variable.
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: ${PROMETHEUS_URL}
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: 5s     # the scrape interval, so $__rate_interval is sensible
+      httpMethod: POST
