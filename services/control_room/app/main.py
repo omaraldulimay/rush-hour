@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import logging
 import time
 from collections import deque
 from contextlib import asynccontextmanager
@@ -22,6 +23,7 @@ from services.control_room.app.metrics import MetricsOffline, Prometheus
 from services.control_room.app.settings import Settings
 
 SERVICE = "control_room"
+log = logging.getLogger(SERVICE)
 STATIC = Path(__file__).parent / "static"
 SLOW_DEFAULT_MS = 3000  # above the checkout's 2 s payment timeout, so the breaker has work to do
 
@@ -57,6 +59,14 @@ def create_app(
     settings = settings or Settings.from_env()
     configure_logging(SERVICE)
 
+    async def publish_gauges_forever() -> None:
+        while True:
+            try:
+                await store.publish_gauges(app.state.pool)
+            except Exception as exc:  # the DB may be briefly away; the gauges just go stale
+                log.warning("could not publish drop gauges: %s", type(exc).__name__)
+            await asyncio.sleep(settings.gauge_interval_s)
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         async with open_resources(app, database_url=settings.database_url, redis_url=None):
@@ -69,9 +79,11 @@ def create_app(
                     client = httpx.AsyncClient(base_url=url, timeout=settings.http_timeout_s)
                     setattr(app.state, attr, client)
                     owned.append(client)
+            gauges = asyncio.create_task(publish_gauges_forever(), name="drop-gauges")
             try:
                 yield
             finally:
+                gauges.cancel()
                 run = app.state.run
                 if run is not None and run.running:
                     run.stop()
@@ -90,7 +102,7 @@ def create_app(
     app.state.revert_task = None
     app.state.incident_until = None
     app.state.events = deque(maxlen=200)
-    app.state.seen = {"breaker": None, "sold_out": set(), "phase": None}
+    app.state.seen = {"breaker": None, "sold_out": set(), "phase": None, "alerts": None}
     install_observability(app, SERVICE, {"postgres": pg_check(app)})
 
     def log_event(kind: str, message: str) -> None:
@@ -122,6 +134,20 @@ def create_app(
         if run is None:
             return {"phase": "idle", "running": False}
         return run.progress()
+
+    def detect_alert_events(alerts: dict | None) -> None:
+        """Alerts that start or stop firing become timeline events (the first poll is silent)."""
+        if alerts is None:
+            return
+        now = {a["name"]: a for a in alerts["firing"]}
+        before = app.state.seen["alerts"]
+        if before is not None:
+            for name, a in now.items():
+                if name not in before:
+                    log_event("alert", f"ALERT {a['severity']}: {name} - {a['summary']}")
+            for name in before.keys() - now.keys():
+                log_event("resolved", f"Alert {name} resolved")
+        app.state.seen["alerts"] = now
 
     def detect_events(kpis: dict | None, stock: dict | None) -> None:
         seen = app.state.seen
@@ -163,12 +189,16 @@ def create_app(
             kpis = await prom.kpis()
         except MetricsOffline as exc:
             metrics = {"online": False, "error": str(exc)}
+        alerts = None
+        with contextlib.suppress(MetricsOffline):
+            alerts = await prom.alerts()
         stock, revenue, db_error = None, None, None
         try:
             stock = await store.drop_status(app.state.pool)
             revenue = await store.revenue_cents(app.state.pool) / 100
         except (TimeoutError, asyncpg.PostgresError, OSError) as exc:
             db_error = type(exc).__name__
+        detect_alert_events(alerts)
         detect_events(kpis, stock)
         fault = await get_fault()
         incident = incident_of(fault) if fault else {"kind": "unknown"}
@@ -179,6 +209,7 @@ def create_app(
             "db": {"online": db_error is None, "error": db_error},
             "kpis": {**(kpis or {}), "revenue_eur": revenue},
             "stock": stock,
+            "alerts": alerts,
             "run": run_view(),
             "incident": incident,
             "events": list(app.state.events)[:60],

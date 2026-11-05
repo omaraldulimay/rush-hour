@@ -16,12 +16,23 @@ from services.payment_mock.app.settings import Settings as PaymentSettings
 from tests.conftest import asgi_client
 
 
-def prom_ok() -> httpx.MockTransport:
+def alert(name: str, severity: str, state: str = "firing") -> dict:
+    return {
+        "labels": {"alertname": name, "severity": severity},
+        "annotations": {"summary": f"{name} summary", "runbook_url": f"https://example/{name}"},
+        "state": state,
+        "activeAt": "2026-01-01T00:00:00Z",
+    }
+
+
+def prom_ok(alerts: list[dict] | None = None) -> httpx.MockTransport:
     def vector(value: str) -> dict:
         data = {"resultType": "vector", "result": [{"metric": {}, "value": [0, value]}]}
         return {"status": "success", "data": data}
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/alerts"):
+            return httpx.Response(200, json={"status": "success", "data": {"alerts": alerts or []}})
         query = request.url.params["query"]
         if request.url.path.endswith("query_range"):
             result = [
@@ -295,3 +306,56 @@ async def test_index_page_is_served(room):
     async with room["build"](prom_ok()) as client:
         resp = await client.get("/")
     assert resp.status_code == 200 and "Rush Hour" in resp.text
+
+
+# --- alerts from Prometheus ---------------------------------------------------------------------
+async def test_state_counts_firing_alerts_by_severity(pool, room):
+    await seed_hot_stock(pool)
+    alerts = [
+        alert("PaymentBreakerOpen", "critical"),
+        alert("HotItemSoldOut", "info"),
+        alert("DBPoolSaturated", "warning", state="pending"),  # not firing yet
+    ]
+    async with room["build"](prom_ok(alerts)) as client:
+        state = (await client.get("/api/state")).json()
+    assert state["alerts"]["counts"] == {"critical": 1, "warning": 0, "info": 1}
+    assert state["alerts"]["pending"] == 1
+    assert [a["name"] for a in state["alerts"]["firing"]] == [
+        "PaymentBreakerOpen",
+        "HotItemSoldOut",
+    ]
+
+
+async def test_alert_transitions_become_timeline_events(pool, room):
+    await seed_hot_stock(pool)
+    current: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return prom_ok(current).handle_request(request)
+
+    async with room["build"](httpx.MockTransport(handler)) as client:
+        await client.get("/api/state")  # first poll is silent: nothing new happened
+        current.append(alert("PaymentBreakerOpen", "critical"))
+        events = (await client.get("/api/state")).json()["events"]
+        assert any(e["kind"] == "alert" and "PaymentBreakerOpen" in e["message"] for e in events)
+        current.clear()
+        events = (await client.get("/api/state")).json()["events"]
+        assert any(e["kind"] == "resolved" and "PaymentBreakerOpen" in e["message"] for e in events)
+
+
+async def test_alerts_are_none_when_prometheus_is_down(pool, room):
+    await seed_hot_stock(pool)
+    async with room["build"](prom_down()) as client:
+        assert (await client.get("/api/state")).json()["alerts"] is None
+
+
+async def test_drop_gauges_expose_stock_and_the_invariant(pool):
+    from prometheus_client import generate_latest
+
+    await seed_hot_stock(pool, spent=0)
+    hot = store.hot_items()[0]
+    await pool.execute("UPDATE inventory.stock SET available = 0 WHERE sku = $1", hot.sku)
+    await store.publish_gauges(pool)
+    text = generate_latest().decode()
+    assert f'drop_stock_available{{item="Drop 01",sku="{hot.sku}"}} 0.0' in text
+    assert "drop_oversold_units 0.0" in text

@@ -8,7 +8,7 @@ from typing import Any
 
 import asyncpg
 import httpx
-from prometheus_client import Counter
+from prometheus_client import Counter, Gauge
 from redis.asyncio import Redis
 from redis.exceptions import ResponseError
 
@@ -25,6 +25,11 @@ EVENTS = Counter("worker_events_total", "Stream events handled", ["status"])
 RETRIES = Counter("worker_payment_retries_total", "Payment retries", ["outcome"])
 EMAILS = Counter("worker_confirmation_emails_total", "Confirmation e-mails sent")
 SWEPT = Counter("order_worker_swept_total", "Stale orders repaired by the sweeper", ["action"])
+# Sampled by the loop every GAUGE_EVERY_S: one ZCARD and one XINFO GROUPS, nothing per order.
+RETRY_QUEUE = Gauge("order_worker_payment_retry_queue", "Orders waiting for a payment retry")
+STREAM_LAG = Gauge("order_worker_stream_lag", "Events in the orders stream not yet delivered")
+STREAM_PENDING = Gauge("order_worker_stream_pending", "Events delivered but not yet acknowledged")
+GAUGE_EVERY_S = 2.0
 
 
 class OrderWorker:
@@ -103,11 +108,23 @@ class OrderWorker:
                 log.exception("sweep failed")
             await asyncio.sleep(self.settings.sweep_interval_s)
 
+    async def sample_gauges(self) -> None:
+        RETRY_QUEUE.set(await self.redis.zcard(RETRY_KEY))
+        for group in await self.redis.xinfo_groups(STREAM):
+            if group["name"] == GROUP:
+                if group.get("lag") is not None:  # None: Redis cannot tell after deleted entries
+                    STREAM_LAG.set(group["lag"])
+                STREAM_PENDING.set(group["pending"])
+
     async def _loop(self) -> None:
+        sampled = 0.0
         while True:
             try:
                 await self.consume_once(block_ms=1000)
                 await self.process_due()
+                if time.monotonic() - sampled >= GAUGE_EVERY_S:
+                    sampled = time.monotonic()
+                    await self.sample_gauges()
             except Exception:
                 log.exception("worker loop error, backing off")
                 await asyncio.sleep(1)
@@ -199,7 +216,7 @@ class OrderWorker:
 
         RETRIES.labels(result).inc()
         if result == "paid":
-            await self._finish(order_id, "paid", None)
+            await self._finish(order_id, "paid", None, revenue_cents=order["total_cents"])  # type: ignore[index]
         else:
             await self._give_up(order_id, "payment_declined")
 
@@ -207,11 +224,15 @@ class OrderWorker:
         await self._finish(order_id, "failed", reason)
         await self._release(order_id)
 
-    async def _finish(self, order_id: str, status: str, reason: str | None) -> None:
+    async def _finish(
+        self, order_id: str, status: str, reason: str | None, *, revenue_cents: int = 0
+    ) -> None:
         moved = await orders_db.set_status(
             self.pool, order_id, status, expected="payment_pending", reason=reason
         )
         if moved:
+            if status == "paid":
+                orders_db.REVENUE_CENTS.inc(revenue_cents)
             await publish_order_event(self.redis, order_id, status)
         elif status == "paid":
             order = await orders_db.get_order(self.pool, order_id)

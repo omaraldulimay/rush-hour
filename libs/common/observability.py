@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
-from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.responses import Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -21,7 +21,13 @@ HTTP_LATENCY = Histogram(
     "http_request_duration_seconds",
     "HTTP request latency",
     ["service", "method", "route", "status"],
-    buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10),
+    # 0.3 and 1 are the SLO thresholds (catalog 300 ms, checkout 1 s): the SLI needs an edge there.
+    buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.3, 0.5, 1, 2.5, 5, 10),
+)
+DB_POOL = Gauge(
+    "db_pool_connections",
+    "asyncpg pool connections: state = used | idle | max (saturation = used / max)",
+    ["service", "state"],
 )
 
 OPS_PATHS = {"/healthz", "/readyz", "/metrics"}
@@ -100,7 +106,18 @@ def install_observability(app: FastAPI, service: str, checks: dict[str, Check] |
 
     @app.get("/metrics", include_in_schema=False)
     async def metrics() -> Response:
+        update_pool_gauges(service, getattr(app.state, "pool", None))
         return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
+def update_pool_gauges(service: str, pool) -> None:
+    """Pool usage is read at scrape time: three integers, no hot-path cost."""
+    if pool is None:
+        return
+    size, idle = pool.get_size(), pool.get_idle_size()
+    DB_POOL.labels(service, "used").set(size - idle)
+    DB_POOL.labels(service, "idle").set(idle)
+    DB_POOL.labels(service, "max").set(pool.get_max_size())
 
 
 def pg_check(app: FastAPI) -> Check:

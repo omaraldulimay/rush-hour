@@ -149,3 +149,26 @@ async def test_unacked_event_is_redelivered_after_failure(stack: Stack) -> None:
 async def test_event_for_unknown_order_is_ignored(stack: Stack) -> None:
     await stack.redis.xadd(STREAM, {"order_id": "ghost", "status": "paid"})
     assert await stack.worker.consume_once() == 1
+
+
+# --- metrics for alerts and dashboards -----------------------------------------------------------
+async def test_gauges_show_the_retry_queue_and_the_stream_backlog(stack: Stack) -> None:
+    from services.order_worker.app import worker as worker_module
+
+    await pending_order(stack)  # one event in the stream, nobody consumed it yet
+    await stack.worker.sample_gauges()
+    assert worker_module.STREAM_LAG._value.get() == 1
+
+    assert await stack.worker.consume_once() == 1  # schedules the payment retry
+    await stack.worker.sample_gauges()
+    assert worker_module.RETRY_QUEUE._value.get() == 1
+    assert worker_module.STREAM_LAG._value.get() == 0
+
+
+async def test_revenue_counter_counts_paid_orders_once(stack: Stack) -> None:
+    from libs.common import orders_db
+
+    before = orders_db.REVENUE_CENTS._value.get()
+    await stack.add_product("R", stock=5, price_cents=2_500)
+    assert (await stack.buy("R", qty=2)).json()["status"] == "paid"
+    assert orders_db.REVENUE_CENTS._value.get() - before == 5_000

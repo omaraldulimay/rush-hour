@@ -3,6 +3,10 @@
 from typing import Any
 
 import asyncpg
+from prometheus_client import Counter
+
+# Incremented by whoever moves an order to `paid` (checkout or the worker retry); sum() over both.
+REVENUE_CENTS = Counter("orders_revenue_cents_total", "Value of orders that became paid, in cents")
 
 Order = dict[str, Any]
 

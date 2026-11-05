@@ -101,3 +101,15 @@ async def test_migrations_are_tracked_and_idempotent(stack: Stack, database_url:
 
 def test_payment_app_without_faults_needs_no_dependencies() -> None:
     assert create_payment(rng=random.Random(0)).title == "payment-mock"
+
+
+async def test_pool_saturation_is_exported(stack: Stack) -> None:
+    async with stack.pool.acquire():  # one connection is in use while we scrape
+        text = (await stack.catalog.get("/metrics")).text
+    used = next(
+        ln
+        for ln in text.splitlines()
+        if ln.startswith('db_pool_connections{service="catalog",state="used"}')
+    )
+    assert float(used.split()[-1]) >= 1
+    assert 'db_pool_connections{service="catalog",state="max"}' in text

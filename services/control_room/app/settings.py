@@ -11,6 +11,7 @@ class Settings:
     checkout_url: str = "http://localhost:8003"
     payment_url: str = "http://localhost:8004"
     http_timeout_s: float = 2.0
+    gauge_interval_s: float = 5.0
 
     @classmethod
     def from_env(cls) -> "Settings":

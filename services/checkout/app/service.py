@@ -104,6 +104,8 @@ class CheckoutService:
             await self.redis.delete(cart_key(cart_id))
 
         ORDERS.labels(status).inc()
+        if status == "paid":
+            orders_db.REVENUE_CENTS.inc(order["total_cents"])
         await publish_order_event(self.redis, order_id, status)
         return await orders_db.get_order(self.pool, order_id), True  # type: ignore[return-value]
 

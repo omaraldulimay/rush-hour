@@ -8,8 +8,12 @@ from datetime import UTC, datetime
 from functools import cache
 
 import asyncpg
+from prometheus_client import Gauge
 
 from scripts.seed import SeedProduct, generate
+
+DROP_STOCK = Gauge("drop_stock_available", "Units left of a limited-drop item", ["sku", "item"])
+DROP_OVERSOLD = Gauge("drop_oversold_units", "Units sold beyond stock (the invariant: always 0)")
 
 EPOCH_START = datetime(1970, 1, 1, tzinfo=UTC)
 
@@ -90,3 +94,12 @@ async def reset_stock(pool: asyncpg.Pool) -> int:
             "ON CONFLICT (id) DO UPDATE SET reset_at = EXCLUDED.reset_at"
         )
     return len(items)
+
+
+async def publish_gauges(pool: asyncpg.Pool) -> dict:
+    """Mirror the limited-drop state into gauges (5 items, cheap) for alerts and dashboards."""
+    status = await drop_status(pool)
+    for item in status["items"]:
+        DROP_STOCK.labels(item["sku"], item["label"]).set(item["available"])
+    DROP_OVERSOLD.set(status["oversold"])
+    return status

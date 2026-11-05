@@ -31,6 +31,7 @@ SERIES_QUERIES = {
     ),
     "orders": f"sum by (status) (rate(checkout_orders_total[{WINDOW}])) * 60",
 }
+SEVERITIES = ("critical", "warning", "info")
 BREAKER_STATES = {0: "closed", 1: "half_open", 2: "open"}
 
 
@@ -61,6 +62,40 @@ class Prometheus:
     async def instant(self, query: str) -> float | None:
         result = await self._get("/api/v1/query", {"query": query})
         return _number(result[0]["value"][1]) if result else None
+
+    async def alerts(self) -> dict:
+        """Alerts that are pending or firing right now, from Prometheus' /api/v1/alerts."""
+        try:
+            resp = await self.client.get("/api/v1/alerts")
+            resp.raise_for_status()
+            body = resp.json()
+            raw = body["data"]["alerts"]
+        except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+            raise MetricsOffline(type(exc).__name__) from exc
+        items = [
+            {
+                "name": a["labels"].get("alertname", "?"),
+                "severity": a["labels"].get("severity", "warning"),
+                "state": a["state"],
+                "summary": a.get("annotations", {}).get("summary", ""),
+                "runbook_url": a.get("annotations", {}).get("runbook_url"),
+                "active_at": a.get("activeAt"),
+            }
+            for a in raw
+            if a.get("state") in ("firing", "pending")
+        ]
+        firing = [a for a in items if a["state"] == "firing"]
+        return {
+            "counts": {sev: sum(1 for a in firing if a["severity"] == sev) for sev in SEVERITIES},
+            "pending": sum(1 for a in items if a["state"] == "pending"),
+            "firing": sorted(
+                firing,
+                key=lambda a: (
+                    SEVERITIES.index(a["severity"]) if a["severity"] in SEVERITIES else 9,
+                    a["name"],
+                ),
+            ),
+        }
 
     async def kpis(self) -> dict:
         values = {name: await self.instant(q) for name, q in KPI_QUERIES.items()}

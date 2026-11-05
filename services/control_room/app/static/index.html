@@ -122,6 +122,7 @@ button.danger { color: var(--bad); border-color: rgba(248,113,113,.5); }
 #events time { color: var(--muted); font-size: 12px; }
 #events .empty { color: var(--muted); display: block; }
 .k-alert { background: var(--bad); } .k-incident { background: var(--warn); } .k-breaker { background: var(--warn); }
+.k-resolved { background: var(--ok); }
 .k-soldout { background: #c084fc; } .k-run { background: var(--info); } .k-stock { background: var(--ok); }
 #events i { width: 9px; height: 9px; border-radius: 50%; display: block; }
 #toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--panel-2); border: 1px solid var(--bad); color: var(--text); padding: 10px 18px; border-radius: 10px; display: none; z-index: 5; }
@@ -147,6 +148,7 @@ button.danger { color: var(--bad); border-color: rgba(248,113,113,.5); }
     <h1>Nordkai <span>/ Rush Hour</span></h1>
     <span class="pill"><i class="dot" id="runDot"></i><span id="runText">idle</span></span>
     <span class="pill"><i class="dot" id="metricsDot"></i><span id="metricsText">connecting</span></span>
+    <span class="pill" id="alertPill"><i class="dot" id="alertDot"></i><span id="alertText">alerts</span></span>
     <span class="spacer"></span>
     <span id="clock"></span>
   </header>
@@ -263,6 +265,21 @@ function renderKpis(s) {
   tile("t-revenue", k.revenue_eur == null ? "off" : "info");
 }
 
+/* ---- alerts badge: firing alerts by severity (Prometheus /api/v1/alerts) ---- */
+function renderAlerts(s) {
+  const a = s.alerts, dot = $("alertDot"), text = $("alertText");
+  if (!a) { dot.className = "dot"; text.textContent = "alerts n/a"; $("alertPill").title = ""; return; }
+  const c = a.counts, total = c.critical + c.warning + c.info;
+  if (!total) {
+    dot.className = "dot ok";
+    text.textContent = a.pending ? "no alerts firing, " + a.pending + " pending" : "no alerts";
+  } else {
+    dot.className = "dot " + (c.critical ? "bad" : c.warning ? "warn" : "");
+    text.textContent = ["critical", "warning", "info"].filter((k) => c[k]).map((k) => c[k] + " " + k).join(" \u00b7 ");
+  }
+  $("alertPill").title = a.firing.map((x) => x.severity + ": " + x.name + " - " + x.summary).join("\n");
+}
+
 /* ---- limited drop ---- */
 function renderStock(s) {
   const st = s.stock;
@@ -330,7 +347,7 @@ async function pollState() {
   try {
     const s = await api("/api/state");
     latestState = s;
-    renderKpis(s); renderStock(s); renderRun(s); renderEvents(s);
+    renderKpis(s); renderAlerts(s); renderStock(s); renderRun(s); renderEvents(s);
   } catch (e) {
     $("metricsDot").className = "dot bad"; $("metricsText").textContent = "control room unreachable";
   }
