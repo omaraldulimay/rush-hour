@@ -24,8 +24,12 @@ make down    # stop and delete volumes
 | checkout | 8003 |
 | payment-mock | 8004 |
 | order-worker (ops endpoints only) | 8005 |
+| control-room (UI), prometheus | 8080, 9090 |
 
-Without Docker: set `DATABASE_URL` and `REDIS_URL`, then
+No Docker? `make local` runs everything as plain processes (Postgres, Redis, Prometheus, the services
+and the Control Room at http://localhost:8080): [docs/local.md](docs/local.md).
+
+Without Docker, by hand: set `DATABASE_URL` and `REDIS_URL`, then
 `python -m libs.common.migrate && python -m scripts.seed` and
 `uvicorn services.<name>.app.main:create_app --factory`.
 `make seed` re-runs migrate + seed against a running stack (idempotent; live stock is kept,
