@@ -358,10 +358,6 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
-      - name: Install Playwright and Chromium (for the screenshots)
-        run: |
-          pip install playwright==1.64.1
-          playwright install --with-deps chromium
       - name: Install the chart (migration hook runs first; atomic rolls back on failure)
         run: |
           # --atomic removes the pods on failure, so keep a trace of what happened while it ran
@@ -377,6 +373,12 @@ jobs:
             -f deploy/helm/rush-hour/values-ci.yaml --set image.tag="sha-${GITHUB_SHA::7}" \
             --wait --atomic --timeout 8m
           kubectl get pods -o wide
+      - name: Install Playwright and Chromium (screenshots only; never blocks the proof)
+        timeout-minutes: 5
+        continue-on-error: true
+        run: |
+          pip install playwright==1.64.1
+          python -m playwright install chromium
       - name: Smoke test through the NodePorts
         run: ./scripts/smoke.sh
       - name: Load burst, HPA scale-up and pod kill (with SLO proof and screenshots during the load)
@@ -387,7 +389,7 @@ jobs:
           rc=0
           ./scripts/k8s/run-load.sh & load=$!
           sleep 80   # the ramp is at full traffic from about second 30
-          python scripts/k8s/screenshots.py --out shots || rc=$?
+          python scripts/k8s/screenshots.py --out shots || echo '::warning::screenshots failed'
           OBS_REPORT=obs-report.md python scripts/k8s/obs_proof.py slo || rc=$?
           wait $load || rc=$?
           if [ -f load-report.md ]; then cat load-report.md | tee -a "$GITHUB_STEP_SUMMARY"; fi
@@ -396,7 +398,7 @@ jobs:
         run: |
           CONTROL_ROOM_URL=http://127.0.0.1:8080 OBS_REPORT=obs-report.md \
             python scripts/k8s/obs_proof.py fault \
-            --on-firing "python scripts/k8s/screenshots.py --out shots --tag incident --only sale-night,control-room"
+            --on-firing "python scripts/k8s/screenshots.py --out shots --tag incident --only sale-night,control-room || true"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
