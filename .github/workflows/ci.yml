@@ -332,13 +332,13 @@ jobs:
         run: |
           # --atomic removes the pods on failure, so keep a trace of what happened while it ran
           mkdir -p diag
-          ( while true; do
+          ( set +e; while true; do
               { date -u +%T; kubectl get pods -A -o wide; kubectl get events -A --sort-by=.lastTimestamp | tail -30; \
                 kubectl logs -l app.kubernetes.io/name=migrate --tail=50 --all-containers --prefix; } >> diag/install.log 2>&1
               sleep 5
             done ) &
           watcher=$!
-          trap 'kill $watcher' EXIT
+          trap 'kill $watcher 2>/dev/null || true' EXIT
           helm upgrade --install rush-hour deploy/helm/rush-hour \
             -f deploy/helm/rush-hour/values-ci.yaml --set image.tag="sha-${GITHUB_SHA::7}" \
             --wait --atomic --timeout 8m
