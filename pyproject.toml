@@ -14,6 +14,7 @@ select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
 [tool.ruff.lint.per-file-ignores]
 # Long PromQL expressions and panel descriptions are easier to read on one line.
 "observability/grafana/build_dashboards.py" = ["E501"]
+"scripts/gameday/run.py" = ["E501"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["libs", "services", "scripts"]

@@ -1,0 +1,76 @@
+name: Game day
+
+# A 6 minute sale night on kind (spike, bad release, slow payment) that writes a readiness report.
+# Not part of normal CI: run it by hand or let the weekly schedule do it.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 4 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gameday
+  cancel-in-progress: false
+
+jobs:
+  gameday:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build the six service images
+        run: |
+          for svc in catalog inventory checkout payment_mock order_worker control_room; do
+            mkdir -p "${RUNNER_TEMP}/images/image-${svc}"
+            docker build -q --build-arg SERVICE="$svc" -t "ghcr.io/omaraldulimay/rush-hour/${svc//_/-}:gameday" .
+            docker save -o "${RUNNER_TEMP}/images/image-${svc}/image.tar" "ghcr.io/omaraldulimay/rush-hour/${svc//_/-}:gameday"
+          done
+      - name: Install helm, kind and k6 (pinned, checksum-verified)
+        run: ./scripts/k8s/install-tools.sh helm kind k6
+      - name: Cluster - kind, images, metrics-server, kube-prometheus-stack, Argo Rollouts
+        env:
+          IMAGES_DIR: ${{ runner.temp }}/images
+          ARGO_ROLLOUTS: "1"
+        run: ./scripts/k8s/cluster-up.sh
+      - name: Install the chart with checkout as a canary Rollout
+        run: |
+          helm upgrade --install rush-hour deploy/helm/rush-hour \
+            -f deploy/helm/rush-hour/values-ci.yaml --set image.tag=gameday \
+            --set rollout.enabled=true --wait --atomic --timeout 8m
+          kubectl wait --for=jsonpath='{.status.phase}'=Healthy rollout/rush-hour-checkout --timeout=300s
+          kubectl get pods -o wide
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:9090/-/ready >/dev/null && break; sleep 2; done
+      - name: Smoke test through the NodePorts
+        run: ./scripts/smoke.sh
+      - name: Port-forward the Control Room (stock and oversold check)
+        run: ./scripts/k8s/port-forward.sh control-room rush-hour-control-room 8080:8000
+      - name: Run the game day
+        run: python3 scripts/gameday/run.py --report docs/gameday/report.md
+      - name: Report in the job summary
+        if: always()
+        run: |
+          if [ -f docs/gameday/report.md ]; then cat docs/gameday/report.md >> "$GITHUB_STEP_SUMMARY"; fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: gameday-report
+          path: |
+            docs/gameday/report.md
+            gameday-k6.json
+            port-forward-*.log
+          if-no-files-found: warn
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          kubectl get all,hpa,rollout,analysisrun -o wide || true
+          kubectl describe rollout rush-hour-checkout || true
+          kubectl get analysisrun -o yaml | tail -80 || true
+          for f in port-forward-*.log; do [ -f "$f" ] && { echo "::group::$f"; cat "$f"; echo "::endgroup::"; }; done || true
+          for p in $(kubectl get pods --no-headers -o name); do
+            echo "::group::logs $p"; kubectl logs "$p" --all-containers --tail=100 --prefix 2>&1 | grep -vE '"GET /(healthz|readyz)' | tail -50 || true; echo "::endgroup::"
+          done
+      - name: Delete the cluster
+        if: always()
+        run: kind delete cluster --name rush-hour

@@ -1,5 +1,6 @@
 // Small k6 load burst against catalog (browse) and checkout (cart + order) for the Kubernetes CI job.
-// Env: CATALOG_URL, CHECKOUT_URL, PHASE ("ramp" or "steady"), SUMMARY (output json path).
+// Env: CATALOG_URL, CHECKOUT_URL, PHASE ("ramp", "steady" or "gameday"), SUMMARY (output json path),
+// HOT_SKUS (gameday only: comma separated limited-drop SKUs that a quarter of the orders go for).
 import http from "k6/http";
 import { Rate, Trend } from "k6/metrics";
 
@@ -13,8 +14,20 @@ const catalogMs = new Trend("catalog_ms", true);
 const checkoutMs = new Trend("checkout_ms", true);
 
 // ramp: quiet start, then a Black Friday jump. steady: constant load while a pod is killed.
+// gameday (360 s): 60 s warm-up, the midnight spike (10 s ramp, 220 s hold), 10 s down, 60 s cool-down.
+const gameday = (warm, peak) => [
+  { target: warm, duration: "10s" },
+  { target: warm, duration: "50s" },
+  { target: peak, duration: "10s" },
+  { target: peak, duration: "220s" },
+  { target: warm, duration: "10s" },
+  { target: warm, duration: "60s" },
+];
+const HOT = (__ENV.HOT_SKUS || "").split(",").filter(Boolean);
 const catalogStages =
-  PHASE === "ramp"
+  PHASE === "gameday"
+    ? gameday(20, 220)
+    : PHASE === "ramp"
     ? [
         { target: 15, duration: "10s" },
         { target: 220, duration: "20s" },
@@ -22,7 +35,9 @@ const catalogStages =
       ]
     : [{ target: 220, duration: "50s" }];
 const checkoutStages =
-  PHASE === "ramp"
+  PHASE === "gameday"
+    ? gameday(2, 12)
+    : PHASE === "ramp"
     ? [
         { target: 2, duration: "10s" },
         { target: 12, duration: "20s" },
@@ -69,7 +84,11 @@ export function browse() {
 
 export function buy() {
   // Accessories have 50-600 pieces each and are not limited drops, so stock never decides the result.
-  const sku = `ACC-${String(1 + Math.floor(Math.random() * 500)).padStart(4, "0")}`;
+  // In the game day a quarter of the orders fight over the limited-drop items (they sell out: 409).
+  const hot = HOT.length > 0 && Math.random() < 0.25;
+  const sku = hot
+    ? HOT[Math.floor(Math.random() * HOT.length)]
+    : `ACC-${String(1 + Math.floor(Math.random() * 500)).padStart(4, "0")}`;
   const cart = `k6-${__VU}-${__ITER}-${Date.now()}`;
   const put = http.put(`${CHECKOUT}/carts/${cart}/items`, JSON.stringify({ sku, qty: 1 }), {
     headers,
@@ -84,7 +103,8 @@ export function buy() {
           timeout: "10s",
         })
       : put;
-  checkoutFail.add(res.status < 200 || res.status > 299);
+  // "sold out" (409) is a correct answer, not a failure
+  checkoutFail.add(res.status < 200 || (res.status > 299 && res.status !== 409));
   checkoutMs.add(res.timings.duration);
 }
 
