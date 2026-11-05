@@ -1,0 +1,115 @@
+# Business and saturation alerts. Thresholds are for the demo's traffic (tens of requests/s).
+groups:
+  - name: business-alerts
+    rules:
+      # max_over_time: while the breaker is open it flips to half_open for one trial call every
+      # cooldown; a plain "== 2" would reset the pending timer on every trial.
+      - alert: PaymentBreakerOpen
+        expr: max(max_over_time(circuit_breaker_state{name="payment"}[1m])) >= 2
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Payment circuit breaker is open
+          description: >-
+            Checkout stopped calling the payment provider because it failed repeatedly. New orders
+            are saved as payment_pending and retried by the order worker; nobody is charged yet.
+          runbook_url: https://github.com/omaraldulimay/rush-hour/blob/main/docs/runbooks/PaymentBreakerOpen.md
+
+      - alert: PaymentPendingBacklogGrowing
+        # per series: growing AND more than 10 waiting; value = growth in orders per minute
+        expr: |
+          max(
+            (deriv(order_worker_payment_retry_queue[5m]) > 0)
+            and (order_worker_payment_retry_queue > 10)
+          ) * 60
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Orders waiting for a payment retry keep piling up (+{{ $value | humanize }} per minute)"
+          description: >-
+            The retry queue of payment_pending orders has grown for 5 minutes and holds more than
+            10 orders. The worker is not keeping up with new pending orders, or retries keep failing.
+          runbook_url: https://github.com/omaraldulimay/rush-hour/blob/main/docs/runbooks/PaymentPendingBacklogGrowing.md
+
+      - alert: NoPaidOrders
+        expr: |
+          sum(rate(http_requests_total{service="checkout",route="/checkout",status=~"2.."}[5m])) * 60 > 3
+          and (sum(rate(orders_revenue_cents_total[5m])) or vector(0)) == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Customers are checking out but no order is being paid
+          description: >-
+            Checkout accepts {{ $value | humanize }} orders per minute but none became paid in 5 minutes.
+            The shop earns nothing right now, even if every dashboard says "no errors".
+          runbook_url: https://github.com/omaraldulimay/rush-hour/blob/main/docs/runbooks/NoPaidOrders.md
+
+      - alert: OrderWorkerNotConsuming
+        expr: |
+          (
+            max(order_worker_stream_lag) > 20
+            and (sum(rate(worker_events_total[2m])) or vector(0)) == 0
+          )
+          or absent(order_worker_stream_lag)
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Order worker is not consuming the orders stream
+          description: >-
+            Events pile up in the orders stream and the worker handles none (or the worker is not
+            reporting at all). Confirmations, payment retries and releases of failed orders stand still.
+          runbook_url: https://github.com/omaraldulimay/rush-hour/blob/main/docs/runbooks/OrderWorkerNotConsuming.md
+
+      - alert: DBPoolSaturated
+        expr: |
+          max by (service) (
+            db_pool_connections{state="used"} / ignoring (state) db_pool_connections{state="max"}
+          ) > 0.9
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.service }}: database connection pool is {{ $value | humanizePercentage }} used"
+          description: >-
+            At least one replica of {{ $labels.service }} has used more than 90 % of its asyncpg
+            pool for 3 minutes. Requests start to queue for a connection and latency climbs.
+          runbook_url: https://github.com/omaraldulimay/rush-hour/blob/main/docs/runbooks/DBPoolSaturated.md
+
+      # Kubernetes only: the metric comes from the pgbouncer exporter sidecar.
+      - alert: PgBouncerClientsWaiting
+        expr: sum(pgbouncer_pools_client_waiting_connections) > 5
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value | humanize }} clients wait for a free database connection in PgBouncer"
+          description: >-
+            More clients wait in PgBouncer than it can serve with its server connections.
+            Postgres is the bottleneck or a transaction is holding a connection too long.
+          runbook_url: https://github.com/omaraldulimay/rush-hour/blob/main/docs/runbooks/PgBouncerClientsWaiting.md
+
+      - alert: HotItemSoldOut
+        expr: drop_stock_available == 0
+        labels:
+          severity: info
+        annotations:
+          summary: "{{ $labels.item }} ({{ $labels.sku }}) sold out"
+          description: >-
+            A limited-drop item has no stock left. Good news for sales, and a marker on the
+            timeline: expect a burst of 409 sold_out answers from checkout, which are not errors.
+          runbook_url: https://github.com/omaraldulimay/rush-hour/blob/main/docs/runbooks/HotItemSoldOut.md
+
+      - alert: StockOversold
+        expr: max(drop_oversold_units) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $value | humanize }} units were sold that never existed"
+          description: >-
+            The invariant of this project is broken: more units of a limited-drop item were
+            reserved or sold than were ever in stock, or stock is negative.
+          runbook_url: https://github.com/omaraldulimay/rush-hour/blob/main/docs/runbooks/StockOversold.md

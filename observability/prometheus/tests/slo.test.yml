@@ -1,0 +1,182 @@
+# promtool test rules observability/prometheus/tests/*.yml
+# Checks the SLO recording rules and that the burn-rate alerts fire (and stay silent) as designed.
+rule_files:
+  - ../rules/slo.rules.yml
+  - ../rules/slo-alerts.rules.yml
+
+evaluation_interval: 30s
+
+tests:
+  # --- recording rules: known inputs, known outputs -----------------------------------------------
+  - name: availability burn rate and budget (1 % errors on a 99.5 % SLO = burn 2)
+    interval: 30s
+    input_series:
+      # 0.5 req/s of 201 and 0.33 req/s of 409 are fine, 0.008 req/s of 500 -> 0.99 % errors (burn 2)
+      - series: 'http_requests_total{service="checkout",route="/checkout",status="201"}'
+        values: '0+15x1000'
+      - series: 'http_requests_total{service="checkout",route="/checkout",status="409"}'
+        values: '0+10x1000'
+      - series: 'http_requests_total{service="checkout",route="/checkout",status="500"}'
+        values: '0+0.25x1000'
+    promql_expr_test:
+      - expr: slo:sli_error_ratio:rate5m{slo="checkout_availability"}
+        eval_time: 10m
+        exp_samples:
+          - labels: 'slo:sli_error_ratio:rate5m{slo="checkout_availability"}'
+            value: 0.009900990099009901
+      - expr: slo:burn_rate:rate1h{slo="checkout_availability"}
+        eval_time: 2h
+        exp_samples:
+          - labels: 'slo:burn_rate:rate1h{slo="checkout_availability"}'
+            value: 1.9801980198019806
+      - expr: slo:objective:ratio{slo="checkout_availability"}
+        eval_time: 1m
+        exp_samples:
+          - labels: 'slo:objective:ratio{slo="checkout_availability"}'
+            value: 0.995
+      - expr: slo:error_budget_remaining:ratio{slo="checkout_availability"}
+        eval_time: 7h
+        exp_samples:
+          - labels: 'slo:error_budget_remaining:ratio{slo="checkout_availability"}'
+            value: -0.9801980198019806
+
+  - name: latency SLI counts requests slower than the threshold bucket
+    interval: 30s
+    input_series:
+      - series: 'http_request_duration_seconds_bucket{service="catalog",route="/products",status="200",le="0.3"}'
+        values: '0+9x1000'
+      - series: 'http_request_duration_seconds_count{service="catalog",route="/products",status="200"}'
+        values: '0+10x1000'
+      # health checks and 5xx are not part of the latency SLI
+      - series: 'http_request_duration_seconds_count{service="catalog",route="/healthz",status="200"}'
+        values: '0+100x1000'
+      - series: 'http_request_duration_seconds_count{service="catalog",route="/products",status="503"}'
+        values: '0+100x1000'
+    promql_expr_test:
+      - expr: slo:sli_error_ratio:rate5m{slo="catalog_latency"}
+        eval_time: 10m
+        exp_samples:
+          - labels: 'slo:sli_error_ratio:rate5m{slo="catalog_latency"}'
+            value: 0.10000000000000009
+      - expr: slo:burn_rate:rate5m{slo="catalog_latency"}
+        eval_time: 10m
+        exp_samples:
+          - labels: 'slo:burn_rate:rate5m{slo="catalog_latency"}'
+            value: 10.000000000000009
+
+  # --- fast burn: page -----------------------------------------------------------------------------
+  - name: SLOFastBurn fires for a sustained 5xx storm on checkout
+    interval: 30s
+    input_series:
+      - series: 'http_requests_total{service="checkout",route="/checkout",status="201"}'
+        values: '0+15x400'
+      - series: 'http_requests_total{service="checkout",route="/checkout",status="503"}'
+        values: '0+3x400'
+    alert_rule_test:
+      - {eval_time: 1m, alertname: SLOFastBurn, exp_alerts: []}   # pending: `for: 2m` not over yet
+      - eval_time: 90m
+        alertname: SLOFastBurn
+        exp_alerts:
+          - exp_labels:
+              slo: checkout_availability
+              severity: critical
+              action: page
+            exp_annotations:
+              summary: "checkout_availability: error budget burns 33.33x too fast"
+              description: >-
+                SLO checkout_availability is consuming its error budget at 33.33x the
+                sustainable rate over the last hour and is still doing so over the last 5 minutes. At
+                this pace a 30 day budget is gone in about two days.
+              runbook_url: https://github.com/omaraldulimay/rush-hour/blob/main/docs/runbooks/SLOFastBurn.md
+
+  - name: SLOFastBurn fires for slow catalog responses
+    interval: 30s
+    input_series:
+      - series: 'http_request_duration_seconds_bucket{service="catalog",route="/products",status="200",le="0.3"}'
+        values: '0+7x400'
+      - series: 'http_request_duration_seconds_count{service="catalog",route="/products",status="200"}'
+        values: '0+10x400'
+      - series: 'http_requests_total{service="catalog",route="/products",status="200"}'
+        values: '0+10x400'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: SLOFastBurn
+        exp_alerts:
+          - exp_labels:
+              slo: catalog_latency
+              severity: critical
+              action: page
+            exp_annotations:
+              summary: "catalog_latency: error budget burns 30x too fast"
+              description: >-
+                SLO catalog_latency is consuming its error budget at 30x the
+                sustainable rate over the last hour and is still doing so over the last 5 minutes. At
+                this pace a 30 day budget is gone in about two days.
+              runbook_url: https://github.com/omaraldulimay/rush-hour/blob/main/docs/runbooks/SLOFastBurn.md
+
+  - name: SLOFastBurn stays silent for 409 sold_out (a correct answer, not an error)
+    interval: 30s
+    input_series:
+      - series: 'http_requests_total{service="checkout",route="/checkout",status="201"}'
+        values: '0+2x400'
+      - series: 'http_requests_total{service="checkout",route="/checkout",status="409"}'
+        values: '0+20x400'
+    alert_rule_test:
+      - {eval_time: 90m, alertname: SLOFastBurn, exp_alerts: []}
+      - {eval_time: 90m, alertname: SLOSlowBurn, exp_alerts: []}
+
+  - name: SLOFastBurn stays silent for a short blip (2 minutes of errors in an hour)
+    interval: 30s
+    input_series:
+      - series: 'http_requests_total{service="checkout",route="/checkout",status="201"}'
+        # 2 requests per interval, the counter stalls while the 500s happen
+        values: '0+10x170 1700+0x4 1700+10x200'
+      - series: 'http_requests_total{service="checkout",route="/checkout",status="500"}'
+        values: '0x170 0+10x4 40x200'
+    alert_rule_test:
+      - {eval_time: 87m, alertname: SLOFastBurn, exp_alerts: []}
+      - {eval_time: 120m, alertname: SLOFastBurn, exp_alerts: []}
+
+  - name: SLOFastBurn stops once the problem is fixed (short window is clean)
+    interval: 30s
+    input_series:
+      - series: 'http_requests_total{service="checkout",route="/checkout",status="201"}'
+        values: '0+15x120 1800+15x200'
+      - series: 'http_requests_total{service="checkout",route="/checkout",status="500"}'
+        values: '0+15x120 1800x200'
+    alert_rule_test:
+      # 1 h of 50 % errors ends at minute 60; 1 h window is still bad at 70 min but 5 m is clean
+      - {eval_time: 70m, alertname: SLOFastBurn, exp_alerts: []}
+
+  - name: SLOFastBurn ignores very low traffic
+    interval: 30s
+    input_series:
+      - series: 'http_requests_total{service="checkout",route="/checkout",status="500"}'
+        values: '0+0.5x400'   # all failed, but only 1 request per minute
+    alert_rule_test:
+      - {eval_time: 90m, alertname: SLOFastBurn, exp_alerts: []}
+
+  # --- slow burn: ticket ---------------------------------------------------------------------------
+  - name: SLOSlowBurn fires for a steady 4 % error rate and SLOFastBurn does not
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{service="checkout",route="/checkout",status="201"}'
+        values: '0+24x480'
+      - series: 'http_requests_total{service="checkout",route="/checkout",status="500"}'
+        values: '0+1x480'
+    alert_rule_test:
+      - {eval_time: 7h, alertname: SLOFastBurn, exp_alerts: []}
+      - eval_time: 7h
+        alertname: SLOSlowBurn
+        exp_alerts:
+          - exp_labels:
+              slo: checkout_availability
+              severity: warning
+              action: ticket
+            exp_annotations:
+              summary: "checkout_availability: error budget burns 8x too fast (slow burn)"
+              description: >-
+                SLO checkout_availability has been using its error budget at 8x the
+                sustainable rate for hours. Not an emergency, but left alone the monthly budget is gone
+                in about five days.
+              runbook_url: https://github.com/omaraldulimay/rush-hour/blob/main/docs/runbooks/SLOSlowBurn.md

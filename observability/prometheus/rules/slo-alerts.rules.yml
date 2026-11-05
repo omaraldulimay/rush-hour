@@ -1,0 +1,43 @@
+# Multi-window, multi-burn-rate alerts (Google SRE Workbook, "Alerting on SLOs").
+# burn rate = error ratio / error budget. The multipliers assume a 30 day SLO window:
+#   14.4x for 1 h  = 2 % of the monthly budget gone in an hour   -> page
+#    6x   for 6 h  = 5 % of the monthly budget gone in six hours -> ticket
+# Each alert needs the long window (the problem is real) AND the short window (it is still
+# happening), so it fires quickly but also stops quickly once the problem is fixed.
+# The traffic guard keeps three requests at 3 am from paging anybody.
+groups:
+  - name: slo-burn-alerts
+    rules:
+      - alert: SLOFastBurn
+        expr: |
+          slo:burn_rate:rate1h > 14.4
+          and slo:burn_rate:rate5m > 14.4
+          and on (slo) slo:requests:rate1h > 0.1
+        for: 2m
+        labels:
+          severity: critical
+          action: page
+        annotations:
+          summary: "{{ $labels.slo }}: error budget burns {{ $value | humanize }}x too fast"
+          description: >-
+            SLO {{ $labels.slo }} is consuming its error budget at {{ $value | humanize }}x the
+            sustainable rate over the last hour and is still doing so over the last 5 minutes. At
+            this pace a 30 day budget is gone in about two days.
+          runbook_url: https://github.com/omaraldulimay/rush-hour/blob/main/docs/runbooks/SLOFastBurn.md
+
+      - alert: SLOSlowBurn
+        expr: |
+          slo:burn_rate:rate6h > 6
+          and slo:burn_rate:rate30m > 6
+          and on (slo) slo:requests:rate6h > 0.1
+        for: 15m
+        labels:
+          severity: warning
+          action: ticket
+        annotations:
+          summary: "{{ $labels.slo }}: error budget burns {{ $value | humanize }}x too fast (slow burn)"
+          description: >-
+            SLO {{ $labels.slo }} has been using its error budget at {{ $value | humanize }}x the
+            sustainable rate for hours. Not an emergency, but left alone the monthly budget is gone
+            in about five days.
+          runbook_url: https://github.com/omaraldulimay/rush-hour/blob/main/docs/runbooks/SLOSlowBurn.md

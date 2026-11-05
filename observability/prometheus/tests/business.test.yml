@@ -1,0 +1,302 @@
+# promtool test rules observability/prometheus/tests/*.yml
+# Business and saturation alerts with their real `for:` durations.
+rule_files:
+  - ../rules/business.rules.yml
+
+evaluation_interval: 15s
+
+tests:
+  # --- PaymentBreakerOpen (for: 2m) ----------------------------------------------------------------
+  - name: PaymentBreakerOpen fires after 2 minutes, also while it flips to half-open for trials
+    interval: 15s
+    input_series:
+      # closed for 1 min, then open; every 10 s cooldown a half-open trial (value 1) in between
+      - series: 'circuit_breaker_state{name="payment",instance="checkout-a"}'
+        values: '0x4 2x10 1 2x10 1 2x10 1 2x20'
+      - series: 'circuit_breaker_state{name="payment",instance="checkout-b"}'
+        values: '0x60'
+    alert_rule_test:
+      - {eval_time: 2m, alertname: PaymentBreakerOpen, exp_alerts: []}   # still pending
+      - eval_time: 5m
+        alertname: PaymentBreakerOpen
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: Payment circuit breaker is open
+              description: >-
+                Checkout stopped calling the payment provider because it failed repeatedly. New orders
+                are saved as payment_pending and retried by the order worker; nobody is charged yet.
+              runbook_url: https://github.com/omaraldulimay/rush-hour/blob/main/docs/runbooks/PaymentBreakerOpen.md
+
+  - name: PaymentBreakerOpen stays silent for a short outage and when closed or half-open
+    interval: 15s
+    input_series:
+      - series: 'circuit_breaker_state{name="payment",instance="a"}'
+        values: '0x4 2x6 0x100'   # open for 90 s only
+      - series: 'circuit_breaker_state{name="payment",instance="b"}'
+        values: '1x100'           # half-open is not open
+      - series: 'circuit_breaker_state{name="other",instance="c"}'
+        values: '2x100'           # some other breaker
+    alert_rule_test:
+      - {eval_time: 3m, alertname: PaymentBreakerOpen, exp_alerts: []}
+      - {eval_time: 20m, alertname: PaymentBreakerOpen, exp_alerts: []}
+
+  - name: PaymentBreakerOpen resolves about a minute after the breaker closes
+    interval: 15s
+    input_series:
+      - series: 'circuit_breaker_state{name="payment"}'
+        values: '2x40 0x100'      # open for 10 minutes, then closed
+    alert_rule_test:
+      - {eval_time: 9m, alertname: PaymentBreakerOpen, exp_alerts: [{exp_labels: {severity: critical}, exp_annotations: {summary: Payment circuit breaker is open, description: "Checkout stopped calling the payment provider because it failed repeatedly. New orders are saved as payment_pending and retried by the order worker; nobody is charged yet.", runbook_url: "https://github.com/omaraldulimay/rush-hour/blob/main/docs/runbooks/PaymentBreakerOpen.md"}}]}
+      - {eval_time: 12m, alertname: PaymentBreakerOpen, exp_alerts: []}
+
+  # --- PaymentPendingBacklogGrowing (for: 5m) -------------------------------------------------------
+  - name: PaymentPendingBacklogGrowing fires when the retry queue grows for 5 minutes
+    interval: 1m
+    input_series:
+      - series: 'order_worker_payment_retry_queue{instance="w1"}'
+        values: '0+2x60'
+    alert_rule_test:
+      - {eval_time: 8m, alertname: PaymentPendingBacklogGrowing, exp_alerts: []}   # still < 10 orders
+      - eval_time: 20m
+        alertname: PaymentPendingBacklogGrowing
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: "Orders waiting for a payment retry keep piling up (+2 per minute)"
+              description: >-
+                The retry queue of payment_pending orders has grown for 5 minutes and holds more than
+                10 orders. The worker is not keeping up with new pending orders, or retries keep failing.
+              runbook_url: https://github.com/omaraldulimay/rush-hour/blob/main/docs/runbooks/PaymentPendingBacklogGrowing.md
+
+  - name: PaymentPendingBacklogGrowing stays silent for a flat, a draining or a tiny queue
+    interval: 1m
+    input_series:
+      - series: 'order_worker_payment_retry_queue{instance="flat"}'
+        values: '50x60'
+      - series: 'order_worker_payment_retry_queue{instance="draining"}'
+        values: '120-2x60'
+      - series: 'order_worker_payment_retry_queue{instance="tiny"}'
+        values: '0+0.1x60'
+    alert_rule_test:
+      - {eval_time: 30m, alertname: PaymentPendingBacklogGrowing, exp_alerts: []}
+
+  # --- NoPaidOrders (for: 5m) ---------------------------------------------------------------------
+  - name: NoPaidOrders fires when orders are accepted but nothing is paid
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{service="checkout",route="/checkout",status="201"}'
+        values: '0+30x60'      # 0.5 accepted orders per second
+      - series: 'orders_revenue_cents_total'
+        values: '0+9900x10 99000x50'   # revenue stops after 10 minutes
+    alert_rule_test:
+      - {eval_time: 12m, alertname: NoPaidOrders, exp_alerts: []}
+      - eval_time: 25m
+        alertname: NoPaidOrders
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: Customers are checking out but no order is being paid
+              description: >-
+                Checkout accepts 30 orders per minute but none became paid in 5 minutes.
+                The shop earns nothing right now, even if every dashboard says "no errors".
+              runbook_url: https://github.com/omaraldulimay/rush-hour/blob/main/docs/runbooks/NoPaidOrders.md
+
+  - name: NoPaidOrders fires even when the revenue counter does not exist yet
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{service="checkout",route="/checkout",status="201"}'
+        values: '0+30x60'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: NoPaidOrders
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: Customers are checking out but no order is being paid
+              description: >-
+                Checkout accepts 30 orders per minute but none became paid in 5 minutes.
+                The shop earns nothing right now, even if every dashboard says "no errors".
+              runbook_url: https://github.com/omaraldulimay/rush-hour/blob/main/docs/runbooks/NoPaidOrders.md
+
+  - name: NoPaidOrders stays silent while orders are paid, without traffic, or when only sold-out answers come
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{service="checkout",route="/checkout",status="201"}'
+        values: '0+30x60'
+      - series: 'orders_revenue_cents_total'
+        values: '0+9900x60'
+      - series: 'http_requests_total{service="checkout",route="/checkout",status="409"}'
+        values: '0+600x60'
+    alert_rule_test:
+      - {eval_time: 30m, alertname: NoPaidOrders, exp_alerts: []}
+
+  - name: NoPaidOrders stays silent when only sold-out answers arrive
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{service="checkout",route="/checkout",status="409"}'
+        values: '0+600x60'
+    alert_rule_test:
+      - {eval_time: 30m, alertname: NoPaidOrders, exp_alerts: []}
+
+  # --- OrderWorkerNotConsuming (for: 2m) -----------------------------------------------------------
+  - name: OrderWorkerNotConsuming fires when events pile up and none are handled
+    interval: 15s
+    input_series:
+      - series: 'order_worker_stream_lag{instance="w1"}'
+        values: '0x8 100+10x80'
+      - series: 'worker_events_total{status="paid",instance="w1"}'
+        values: '5x100'
+    alert_rule_test:
+      - {eval_time: 90s, alertname: OrderWorkerNotConsuming, exp_alerts: []}
+      - eval_time: 8m
+        alertname: OrderWorkerNotConsuming
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: Order worker is not consuming the orders stream
+              description: >-
+                Events pile up in the orders stream and the worker handles none (or the worker is not
+                reporting at all). Confirmations, payment retries and releases of failed orders stand still.
+              runbook_url: https://github.com/omaraldulimay/rush-hour/blob/main/docs/runbooks/OrderWorkerNotConsuming.md
+
+  - name: OrderWorkerNotConsuming fires when the worker stops reporting at all
+    interval: 15s
+    input_series:
+      - series: 'order_worker_stream_lag{instance="w1"}'
+        values: '0x20 stale'     # the pod is gone: Prometheus writes a stale marker
+    alert_rule_test:
+      - {eval_time: 4m, alertname: OrderWorkerNotConsuming, exp_alerts: []}
+      - eval_time: 8m
+        alertname: OrderWorkerNotConsuming
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: Order worker is not consuming the orders stream
+              description: >-
+                Events pile up in the orders stream and the worker handles none (or the worker is not
+                reporting at all). Confirmations, payment retries and releases of failed orders stand still.
+              runbook_url: https://github.com/omaraldulimay/rush-hour/blob/main/docs/runbooks/OrderWorkerNotConsuming.md
+
+  - name: OrderWorkerNotConsuming stays silent for a busy worker and for an idle one
+    interval: 15s
+    input_series:
+      - series: 'order_worker_stream_lag{instance="busy"}'
+        values: '500x100'                 # big backlog, but being worked off
+      - series: 'worker_events_total{status="paid",instance="busy"}'
+        values: '0+20x100'
+    alert_rule_test:
+      - {eval_time: 20m, alertname: OrderWorkerNotConsuming, exp_alerts: []}
+
+  - name: OrderWorkerNotConsuming stays silent for an idle worker with an empty stream
+    interval: 15s
+    input_series:
+      - series: 'order_worker_stream_lag{instance="idle"}'
+        values: '0x100'
+      - series: 'worker_events_total{status="paid",instance="idle"}'
+        values: '7x100'
+    alert_rule_test:
+      - {eval_time: 20m, alertname: OrderWorkerNotConsuming, exp_alerts: []}
+
+  # --- DBPoolSaturated (for: 3m) --------------------------------------------------------------------
+  - name: DBPoolSaturated fires per service for a pool that stays above 90 %
+    interval: 15s
+    input_series:
+      - series: 'db_pool_connections{service="checkout",state="used",instance="a"}'
+        values: '10x100'
+      - series: 'db_pool_connections{service="checkout",state="max",instance="a"}'
+        values: '10x100'
+      - series: 'db_pool_connections{service="catalog",state="used",instance="b"}'
+        values: '4x100'
+      - series: 'db_pool_connections{service="catalog",state="max",instance="b"}'
+        values: '10x100'
+    alert_rule_test:
+      - {eval_time: 2m, alertname: DBPoolSaturated, exp_alerts: []}
+      - eval_time: 5m
+        alertname: DBPoolSaturated
+        exp_alerts:
+          - exp_labels: {severity: warning, service: checkout}
+            exp_annotations:
+              summary: "checkout: database connection pool is 100% used"
+              description: >-
+                At least one replica of checkout has used more than 90 % of its asyncpg
+                pool for 3 minutes. Requests start to queue for a connection and latency climbs.
+              runbook_url: https://github.com/omaraldulimay/rush-hour/blob/main/docs/runbooks/DBPoolSaturated.md
+
+  - name: DBPoolSaturated ignores a short spike
+    interval: 15s
+    input_series:
+      - series: 'db_pool_connections{service="checkout",state="used",instance="a"}'
+        values: '3x8 10x8 3x100'
+      - series: 'db_pool_connections{service="checkout",state="max",instance="a"}'
+        values: '10x100'
+    alert_rule_test:
+      - {eval_time: 10m, alertname: DBPoolSaturated, exp_alerts: []}
+
+  # --- PgBouncerClientsWaiting (for: 2m) ----------------------------------------------------------
+  - name: PgBouncerClientsWaiting fires when many clients wait and not for a few
+    interval: 15s
+    input_series:
+      - series: 'pgbouncer_pools_client_waiting_connections{database="rushhour",instance="p1"}'
+        values: '0x4 6x100'
+      - series: 'pgbouncer_pools_client_waiting_connections{database="rushhour",instance="p2"}'
+        values: '4x104'
+    alert_rule_test:
+      - {eval_time: 1m, alertname: PgBouncerClientsWaiting, exp_alerts: []}
+      - eval_time: 5m
+        alertname: PgBouncerClientsWaiting
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: "10 clients wait for a free database connection in PgBouncer"
+              description: >-
+                More clients wait in PgBouncer than it can serve with its server connections.
+                Postgres is the bottleneck or a transaction is holding a connection too long.
+              runbook_url: https://github.com/omaraldulimay/rush-hour/blob/main/docs/runbooks/PgBouncerClientsWaiting.md
+
+  - name: PgBouncerClientsWaiting stays silent when nobody waits
+    interval: 15s
+    input_series:
+      - series: 'pgbouncer_pools_client_waiting_connections{database="rushhour",instance="p1"}'
+        values: '0x100'
+    alert_rule_test:
+      - {eval_time: 20m, alertname: PgBouncerClientsWaiting, exp_alerts: []}
+
+  # --- HotItemSoldOut (info, immediately) and StockOversold -------------------------------------
+  - name: HotItemSoldOut fires only for the item that reached zero
+    interval: 15s
+    input_series:
+      - series: 'drop_stock_available{sku="SNK-0001",item="Drop 01"}'
+        values: '3 2 1 0 0 0 0 0'
+      - series: 'drop_stock_available{sku="SNK-0002",item="Drop 02"}'
+        values: '12x8'
+    alert_rule_test:
+      - {eval_time: 30s, alertname: HotItemSoldOut, exp_alerts: []}
+      - eval_time: 90s
+        alertname: HotItemSoldOut
+        exp_alerts:
+          - exp_labels: {severity: info, sku: SNK-0001, item: Drop 01}
+            exp_annotations:
+              summary: "Drop 01 (SNK-0001) sold out"
+              description: >-
+                A limited-drop item has no stock left. Good news for sales, and a marker on the
+                timeline: expect a burst of 409 sold_out answers from checkout, which are not errors.
+              runbook_url: https://github.com/omaraldulimay/rush-hour/blob/main/docs/runbooks/HotItemSoldOut.md
+
+  - name: StockOversold fires on the first oversold unit and is silent at zero
+    interval: 15s
+    input_series:
+      - series: 'drop_oversold_units'
+        values: '0x4 3x4'
+    alert_rule_test:
+      - {eval_time: 45s, alertname: StockOversold, exp_alerts: []}
+      - eval_time: 90s
+        alertname: StockOversold
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: "3 units were sold that never existed"
+              description: >-
+                The invariant of this project is broken: more units of a limited-drop item were
+                reserved or sold than were ever in stock, or stock is negative.
+              runbook_url: https://github.com/omaraldulimay/rush-hour/blob/main/docs/runbooks/StockOversold.md
