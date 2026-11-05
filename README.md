@@ -1,5 +1,7 @@
 # Rush Hour
 
+[![CI](https://github.com/omaraldulimay/rush-hour/actions/workflows/ci.yml/badge.svg)](https://github.com/omaraldulimay/rush-hour/actions/workflows/ci.yml)
+
 Platform behind a fictional fashion shop (Nordkai Fashion) that is built to survive a Black Friday
 night. Design and goals: [docs/architecture.md](docs/architecture.md). This repository currently
 contains step 1: five services, migrations, seed data, docker compose and tests.
@@ -39,6 +41,21 @@ make test
 Tests need no Docker. Without `DATABASE_URL` they start a throwaway Postgres cluster
 (`initdb` + `pg_ctl` from `/Library/PostgreSQL/16/bin`, override with `PG_BIN`) on a free port and
 delete it afterwards. Redis is `fakeredis` unless `REDIS_URL` is set.
+
+## CI
+
+`.github/workflows/ci.yml` runs on every push to `main`, every pull request and on demand.
+
+| Job | What it proves |
+|---|---|
+| `lint` | `ruff check` and `ruff format --check` are clean |
+| `test` | The whole suite passes against real Postgres 16 and Redis 7 (service containers), not just fakeredis |
+| `build` | All five images build; on `main` they are pushed to `ghcr.io/omaraldulimay/rush-hour/<service>` as `sha-<short>` and `main` |
+| `scan` | Trivy finds no fixable CRITICAL/HIGH vulnerabilities in any image; results go to code scanning |
+| `smoke` | The stack started from the just-built images works end to end (`scripts/smoke.sh`: browse, cart, checkout, paid order, stock decreased, `/metrics`) |
+| `sign` (main) | Each pushed image has an SPDX SBOM attestation and a keyless cosign signature that is verified against this workflow's identity |
+
+Action versions are pinned to commit SHAs; Dependabot updates them weekly (plus pip and Docker).
 
 ## Endpoints
 
