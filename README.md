@@ -2,6 +2,8 @@
 
 [![CI](https://github.com/omaraldulimay/rush-hour/actions/workflows/ci.yml/badge.svg)](https://github.com/omaraldulimay/rush-hour/actions/workflows/ci.yml)
 
+▶ **Try it in the browser:** [interactive demo on my portfolio](https://omaraldulimay.github.io/projekte/rush-hour.html#demo)
+
 Platform behind a fictional fashion shop (Nordkai Fashion) that is built to survive a Black Friday
 night. Design and goals: [docs/architecture.md](docs/architecture.md). This repository currently
 contains steps 1-3: five services, migrations, seed data, docker compose, tests, CI and a Helm chart
